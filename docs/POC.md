@@ -22,9 +22,15 @@ Health is expressed **perceptually**, not as a number on a chart:
 | Tremor | none | slight | violent, at the measured frequency |
 | Alarm | silent | silent | beeping, faster as it worsens |
 
+The default view frames the whole machine — 142 m from tower foot to blade tip:
+
+![Overview](images/poc-overview.png)
+
+Flown to the drive train, a healthy machine: every avatar green.
+
 ![Healthy machine](images/poc-healthy.png)
 
-The same scene at `t=150 s` of the `gearbox_degradation` scenario. The gearbox
+The same view at `t=150 s` of the `gearbox_degradation` scenario. The gearbox
 and the main bearing — which shares its heat signature — have gone red. The
 generator, the pitch system and the blades are untouched, because the fault is
 discriminative: the scoring rules localise it.
@@ -49,9 +55,12 @@ uv run uvicorn telemetry.main:app --port 8000 --reload
 Unity -batchmode -quit -projectPath . -executeMethod Vrar.EditorTools.MvpSceneBuilder.BuildFromCommandLine
 ```
 
-Controls: **WASD** to move, **Q/E** down/up, **right-mouse drag** to look,
-**shift** to move faster. `SimulatedHmdRig` stands in for the XR Device
-Simulator: no headset, no XR runtime, same camera rig the XR path will use.
+You start on the ground, ~210 m out, framed on the whole turbine. Controls:
+**WASD** to move, **Q/E** down/up, **right-mouse drag** to look, **shift** to
+move faster. Fly up to the nacelle to read the avatars. `SimulatedHmdRig`
+stands in for the XR Device Simulator: no headset, no XR runtime, same camera
+rig the XR path will use. The Editor menu **VRAR → PoC → Frame Camera On
+Turbine** re-frames the view if you get lost.
 
 ### Without the service
 
@@ -67,13 +76,20 @@ Unity ... -vrar-time 150      # scrub straight to a failing machine
 Unity ... -vrar-endpoint http://192.168.1.10:8000
 ```
 
-Editor menu **VRAR → PoC** exposes scene build and screenshot capture. To capture
-a frame headlessly (used to produce the images above):
+Editor menu **VRAR → PoC** exposes scene build and screenshot capture. To
+capture a frame headlessly, the way the images above were produced:
 
 ```bash
+# whole machine (default view)
 Unity -batchmode -projectPath . \
   -executeMethod Vrar.EditorTools.PocCapture.CaptureFromCommandLine \
-  -vrar-capture-out docs/images/poc.png -vrar-capture-frames 2500 -vrar-time 150
+  -vrar-capture-out docs/images/poc-overview.png -vrar-capture-frames 300
+
+# drive train at t=150 s, i.e. the failing gearbox
+Unity -batchmode -projectPath . \
+  -executeMethod Vrar.EditorTools.PocCapture.CaptureFromCommandLine \
+  -vrar-capture-out docs/images/poc-gearbox-fault.png \
+  -vrar-capture-view nacelle -vrar-capture-frames 2500 -vrar-time 150
 ```
 
 ## The telemetry contract
@@ -143,9 +159,12 @@ unity test --mode PlayMode --output /tmp/playmode.xml
 - `TurbineAvatarTests` asserts the claim itself: a healthy frame leaves every
   avatar green; a faulted frame turns the gearbox red and spares the generator;
   failing parts tremble and healthy ones hold still.
-- `SceneRigTests` guards a bug this PoC actually had: a rig built in the Editor
-  lost its avatar index when the scene was loaded from disk, and silently dropped
-  every frame.
+- `SceneRigTests` guards two bugs this PoC actually had: a rig built in the
+  Editor lost its avatar index when the scene was loaded from disk and silently
+  dropped every frame, and the scene's default camera cropped the rotor out of
+  frame. It projects the machine's bounding box through the camera and asserts
+  all eight corners land on screen, and that the fly rig keeps the authored view
+  angle instead of snapping to the horizon.
 - `LiveServiceTests` round-trips against a running service and skips when it is
   not reachable, so the suite still passes offline.
 

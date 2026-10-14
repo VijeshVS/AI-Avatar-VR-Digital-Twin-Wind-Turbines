@@ -44,6 +44,11 @@ namespace Vrar.EditorTools
             }
 
             EditorSceneManager.OpenScene(MvpSceneBuilder.ScenePath);
+
+            // After opening, before play mode: the viewer only exists once the
+            // scene is loaded, and the rig adopts this view on its first Awake.
+            ApplyCaptureView();
+
             Debug.Log($"[VRAR] capturing after {frames} frames to {outputPath}");
             EditorApplication.EnterPlaymode();
 
@@ -99,9 +104,47 @@ namespace Vrar.EditorTools
             EditorApplication.update += tick;
         }
 
+        /// <summary>
+        /// <c>-vrar-capture-view wide|nacelle</c>. The scene's default view frames
+        /// the whole machine; the documentation shots of the avatars need the
+        /// camera flown to the drive train first.
+        /// </summary>
+        private static void ApplyCaptureView()
+        {
+            string view = ReadArgument("-vrar-capture-view") ?? "wide";
+            Presentation.SimulatedHmdRig viewer = Object.FindFirstObjectByType<Presentation.SimulatedHmdRig>();
+            if (viewer == null)
+            {
+                return;
+            }
+
+            if (view == "nacelle")
+            {
+                MvpSceneBuilder.FrameViewerOnNacelle(viewer.gameObject);
+            }
+            else
+            {
+                MvpSceneBuilder.FrameViewer(viewer.gameObject, Camera.main);
+            }
+
+            Debug.Log($"[VRAR] capture view: {view} at {viewer.transform.position}");
+        }
+
         /// <summary>Log what the PoC was actually showing when the frame was taken.</summary>
         private static void LogDiagnostics()
         {
+            foreach (Presentation.SimulatedHmdRig viewer in Object.FindObjectsByType<Presentation.SimulatedHmdRig>())
+            {
+                Debug.Log($"[VRAR] viewer {viewer.name} at {viewer.transform.position} rot {viewer.transform.eulerAngles}");
+            }
+
+            Camera main = Camera.main;
+            if (main != null)
+            {
+                Debug.Log($"[VRAR] camera {main.name} at {main.transform.position} fov={main.fieldOfView} " +
+                          $"aspect={main.aspect:0.00} far={main.farClipPlane}");
+            }
+
             foreach (Vrar.Bootstrap.MvpBootstrap bootstrap in Object.FindObjectsByType<Vrar.Bootstrap.MvpBootstrap>())
             {
                 Vrar.Telemetry.TelemetryFrame frame = bootstrap.LastFrame;
