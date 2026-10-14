@@ -21,5 +21,6 @@ Headline limitations, stated up front:
 
 ## Documentation
 
+- [`docs/POC.md`](docs/POC.md) — **runnable proof of concept**: synthetic telemetry → explainable health → avatars that change colour, emission, tremor and sound
 - [`docs/PRD.md`](docs/PRD.md) — Product Requirements Document (problem statement, users, user stories, functional and non-functional requirements, assumptions, limitations)
 - [`topic.md`](topic.md) — original project brief
