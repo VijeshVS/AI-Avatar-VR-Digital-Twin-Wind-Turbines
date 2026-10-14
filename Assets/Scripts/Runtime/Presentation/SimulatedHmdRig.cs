@@ -25,7 +25,18 @@ namespace Vrar.Presentation
         private float _yaw;
         private float _pitch;
 
-        public Transform Head => _head;
+        /// <summary>
+        /// The simulated headset. Assign a head at edit time to parent the camera
+        /// to it, so looking up and down rotates the view.
+        /// </summary>
+        public Transform Head
+        {
+            get => _head;
+            set => _head = value;
+        }
+
+        /// <summary>Standing eye height above the rig's feet.</summary>
+        public float Height => _height;
 
         private void Awake()
         {
@@ -41,7 +52,18 @@ namespace Vrar.Presentation
                 _head = head.transform;
             }
 
-            _yaw = transform.eulerAngles.y;
+            // Adopt the authored view. ReadLook() rebuilds the rotation every
+            // frame from _yaw/_pitch, so starting them at zero would snap a camera
+            // that the scene had pointed at the machine's upper half down to the
+            // horizon, and anything above the frame centre would be lost.
+            Vector3 body = transform.eulerAngles;
+            _yaw = body.y;
+            _pitch = NormaliseAngle(body.x) + NormaliseAngle(_head.localEulerAngles.x);
+        }
+
+        private static float NormaliseAngle(float degrees)
+        {
+            return degrees > 180f ? degrees - 360f : degrees < -180f ? degrees + 360f : degrees;
         }
 
         private void Update()

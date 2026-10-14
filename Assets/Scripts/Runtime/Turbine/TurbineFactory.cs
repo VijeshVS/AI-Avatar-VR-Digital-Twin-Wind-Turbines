@@ -121,9 +121,12 @@ namespace Vrar.Turbine
             var blades = new List<Transform>();
             for (int i = 0; i < BladeCount; i++)
             {
+                // Unity's cube is one unit across, so the scale is the blade's size
+                // in metres: a RotorRadius-long blade centred RotorRadius/2 above
+                // the hub puts the root at the hub and the tip RotorRadius out.
                 GameObject blade = Primitive(
                     bladeSet.transform, $"Blade_{i + 1}", PrimitiveType.Cube, structure,
-                    Vector3.zero, new Vector3(2.6f, RotorRadius / 2f, 0.5f));
+                    Vector3.zero, new Vector3(2.6f, RotorRadius, 0.5f));
                 blade.transform.localPosition = new Vector3(0f, RotorRadius / 2f + 1.5f, 0f);
                 blade.transform.localRotation = Quaternion.Euler(0f, 0f, i * (360f / BladeCount));
                 blades.Add(blade.transform);
