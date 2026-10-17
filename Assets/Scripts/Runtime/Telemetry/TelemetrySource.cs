@@ -27,7 +27,7 @@ namespace Vrar.Telemetry
 
         public IEnumerator Fetch(int requestToken, Action<TelemetryFrame, string> onComplete)
         {
-            string url = $"{_endpoint}/api/telemetry?t={requestToken / 10f:0.0}";
+            string url = $"{_endpoint}/api/telemetry?t={requestToken / 1f:0.0}";
             using UnityWebRequest request = UnityWebRequest.Get(url);
             request.timeout = _timeoutSeconds;
             yield return request.SendWebRequest();

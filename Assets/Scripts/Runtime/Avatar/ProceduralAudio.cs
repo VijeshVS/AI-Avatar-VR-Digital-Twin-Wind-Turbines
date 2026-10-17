@@ -47,7 +47,9 @@ namespace Vrar.Avatar
             _alarmSource.clip = _alarmClip;
             _alarmSource.loop = true;
             _alarmSource.volume = 0f;
-            _alarmSource.spatialBlend = 1f;
+            // The alarm is global: a critical fault must be audible from anywhere
+            // in the scene, including from 200 m out. Only the hum is spatialised.
+            _alarmSource.spatialBlend = 0f;
             _alarmSource.playOnAwake = false;
         }
 

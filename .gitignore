@@ -37,3 +37,7 @@ venv/
 .ruff_cache/
 # Capture output from the headless PoC screenshot tool
 /Artifacts/
+
+# Mono/Unity crash dumps from batchmode runs
+mono_crash.*.json
+crashlytics-build.properties
