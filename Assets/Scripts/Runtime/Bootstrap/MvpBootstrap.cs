@@ -33,6 +33,8 @@ namespace Vrar.Bootstrap
         private ITelemetrySource _source;
         private ProceduralAudio _audio;
         private HudOverlay _hud;
+        private ComponentFocusFlight _focusFlight;
+        private ComponentFocusIsolation _focusIsolation;
         private float _pollTimer;
         private int _requestToken;
         private bool _connected;
@@ -57,6 +59,12 @@ namespace Vrar.Bootstrap
 
             _hud = gameObject.AddComponent<HudOverlay>();
             _hud.SetRig(_rig);
+
+            _focusFlight = gameObject.AddComponent<ComponentFocusFlight>();
+            _focusFlight.Bind(_rig, _hud.Focus);
+
+            _focusIsolation = gameObject.AddComponent<ComponentFocusIsolation>();
+            _focusIsolation.Bind(_rig, _hud.Focus);
 
             _source = CreateSource();
             if (_source is HttpTelemetrySource http)

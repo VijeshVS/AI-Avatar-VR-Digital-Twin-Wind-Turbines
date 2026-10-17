@@ -49,10 +49,32 @@ namespace Vrar.EditorTools
             // scene is loaded, and the rig adopts this view on its first Awake.
             ApplyCaptureView();
 
-            Debug.Log($"[VRAR] capturing after {frames} frames to {outputPath}");
+            // Focus mode has to be entered in play mode, because the HUD that owns
+            // the selection is created by the bootstrap at runtime.
+            string focusComponent = ReadArgument("-vrar-capture-focus");
+            int settleFrames = int.TryParse(ReadArgument("-vrar-capture-settle"), out int settle) ? settle : 90;
+
+            // -vrar-capture-esc clears focus again just before the shutter, which
+            // is the only way to prove Escape flies the camera back rather than
+            // stranding the viewer over the drive train.
+            bool escapeAfterFocus = HasArgument("-vrar-capture-esc");
+
+            Debug.Log($"[VRAR] capturing after {frames} frames to {outputPath}" +
+                      (string.IsNullOrEmpty(focusComponent) ? string.Empty : $" focused on '{focusComponent}'"));
+
+            // No graphics device under -nographics means no IMGUI pass and no
+            // ScreenCapture, so ask for a real Metal device before entering play.
+            if (System.Array.IndexOf(System.Environment.GetCommandLineArgs(), "-nographics") < 0)
+            {
+                PlayerSettings.useFlipModelSwapchain = false;
+            }
+
             EditorApplication.EnterPlaymode();
 
             int warmup = frames;
+            int settling = string.IsNullOrEmpty(focusComponent) ? 0 : settleFrames;
+            bool focusApplied = string.IsNullOrEmpty(focusComponent);
+            int focusAttempts = 0;
             string absolute = Path.GetFullPath(outputPath);
 
             EditorApplication.CallbackFunction tick = null;
@@ -66,6 +88,39 @@ namespace Vrar.EditorTools
                 if (warmup > 0)
                 {
                     warmup--;
+                    return;
+                }
+
+                if (!focusApplied)
+                {
+                    // Guard against an unresolvable id looping forever: capture
+                    // the overview instead rather than spinning until the timeout.
+                    if (++focusAttempts > 600)
+                    {
+                        Debug.LogWarning($"[VRAR] focus on '{focusComponent}' never took; capturing unfocused.");
+                        focusApplied = true;
+                        return;
+                    }
+
+                    focusApplied = ApplyFocus(focusComponent);
+                    return;
+                }
+
+                if (settling > 0)
+                {
+                    settling--;
+                    return;
+                }
+
+                if (escapeAfterFocus)
+                {
+                    escapeAfterFocus = false;
+                    foreach (Presentation.HudOverlay hud in Object.FindObjectsByType<Presentation.HudOverlay>())
+                    {
+                        Debug.Log($"[VRAR] clearing focus, hasFocus was {hud.Focus.HasFocus}");
+                        hud.Focus.Clear();
+                    }
+
                     return;
                 }
 
@@ -102,6 +157,27 @@ namespace Vrar.EditorTools
             };
 
             EditorApplication.update += tick;
+        }
+
+        /// <summary>
+        /// Enter focus mode on the named component. Returns false while the HUD is
+        /// not up yet, so the caller keeps polling instead of capturing too early.
+        /// </summary>
+        private static bool ApplyFocus(string componentId)
+        {
+            foreach (Presentation.HudOverlay hud in Object.FindObjectsByType<Presentation.HudOverlay>())
+            {
+                hud.Focus.Select(componentId);
+                if (!hud.Focus.HasFocus)
+                {
+                    return false;
+                }
+
+                Debug.Log($"[VRAR] focus requested on '{componentId}', hasFocus={hud.Focus.HasFocus}");
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -156,6 +232,57 @@ namespace Vrar.EditorTools
             foreach (Light light in Object.FindObjectsByType<Light>())
             {
                 Debug.Log($"[VRAR] light {light.name} intensity={light.intensity} enabled={light.enabled}");
+            }
+
+            LogAvatarRendering();
+            LogFocusFlight();
+        }
+
+        /// <summary>Report whether the focus camera flight is actually running.</summary>
+        private static void LogFocusFlight()
+        {
+            foreach (Presentation.ComponentFocusFlight flight in
+                     Object.FindObjectsByType<Presentation.ComponentFocusFlight>())
+            {
+                Debug.Log($"[VRAR] flight viewer={(flight.Viewer == null ? "NULL" : flight.Viewer.name)} " +
+                          $"ticks={flight.LateUpdateTicks} returning={flight.Returning} " +
+                          $"center={flight.LastBoundsCenter} distance={flight.LastFramingDistance:0.00} " +
+                          $"target={flight.LastTargetPosition} autoFlying={flight.Viewer?.IsAutoFlying} " +
+                          $"eye={flight.Viewer?.EyePosition}");
+            }
+        }
+
+        /// <summary>
+        /// Report, per avatar, the focus state and the actual shader state the
+        /// renderer ended up with. Alpha in the property block only dims a part
+        /// if the material really is on the transparent blend path, so the keyword
+        /// and the render queue are the facts worth asserting on.
+        /// </summary>
+        private static void LogAvatarRendering()
+        {
+            Debug.Log("[VRAR] --- every renderer in the scene ---");
+            foreach (Renderer renderer in Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None))
+            {
+                if (renderer == null || renderer.sharedMaterial == null)
+                {
+                    continue;
+                }
+
+                Vrar.Avatar.ComponentAvatar owner = renderer.GetComponentInParent<Vrar.Avatar.ComponentAvatar>();
+                Material material = renderer.sharedMaterial;
+                var block = new MaterialPropertyBlock();
+                renderer.GetPropertyBlock(block);
+                Color baseColor = block.GetColor("_BaseColor");
+
+                Debug.Log($"[VRAR] renderer {renderer.gameObject.name,-12} " +
+                          $"owner={(owner == null ? "NONE" : owner.ComponentId),-13} " +
+                          $"focus={(owner == null ? "-" : owner.Focus.ToString()),-7} " +
+                          $"queue={material.renderQueue} transparent={material.IsKeywordEnabled("_SURFACE_TYPE_TRANSPARENT")} " +
+                          $"alpha={baseColor.a:0.000} mat={material.name} shader={material.shader.name} " +
+                          $"base={(material.HasProperty("_BaseColor") ? material.GetColor("_BaseColor").ToString() : "-")} " +
+                          $"smooth={(material.HasProperty("_Smoothness") ? material.GetFloat("_Smoothness").ToString("0.00") : "-")} " +
+                          $"metal={(material.HasProperty("_Metallic") ? material.GetFloat("_Metallic").ToString("0.00") : "-")} " +
+                          $"srcBlend={(material.HasProperty("_SrcBlend") ? material.GetFloat("_SrcBlend").ToString() : "-")}");
             }
         }
 
@@ -228,6 +355,19 @@ namespace Vrar.EditorTools
             }
 
             return null;
+        }
+
+        private static bool HasArgument(string name)
+        {
+            foreach (string argument in System.Environment.GetCommandLineArgs())
+            {
+                if (argument == name)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }

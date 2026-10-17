@@ -22,8 +22,17 @@ namespace Vrar.Turbine
 
         private static readonly Dictionary<Color, Material> MaterialCache = new Dictionary<Color, Material>();
 
-        /// <summary>Shared URP material for a flat colour. Cached so tests can assert identity.</summary>
-        public static Material FlatMaterial(Color color)
+        /// <summary>
+        /// Shared URP material for a flat colour. Cached so tests can assert identity.
+        /// </summary>
+        /// <param name="color">Base colour.</param>
+        /// <param name="smoothness">
+        /// Painted steel, not chrome. URP/Lit defaults to 0.5 smoothness, which is a
+        /// half-mirror: any face turned away from the sun then shows only a dark
+        /// ambient reflection and reads as black, so the tower and nacelle vanish
+        /// against the landscape. Structure is matte.
+        /// </param>
+        public static Material FlatMaterial(Color color, float smoothness = 0.18f)
         {
             if (MaterialCache.TryGetValue(color, out Material cached) && cached != null)
             {
@@ -36,6 +45,15 @@ namespace Vrar.Turbine
 
             Material material = new Material(shader) { name = $"Avatar_{ColorUtility.ToHtmlStringRGB(color)}" };
             SetColor(material, color);
+            if (material.HasProperty("_Smoothness"))
+            {
+                material.SetFloat("_Smoothness", smoothness);
+            }
+
+            if (material.HasProperty("_Metallic"))
+            {
+                material.SetFloat("_Metallic", 0f);
+            }
             MaterialCache[color] = material;
             return material;
         }

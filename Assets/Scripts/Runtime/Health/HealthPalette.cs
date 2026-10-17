@@ -30,11 +30,23 @@ namespace Vrar.Health
                 return Color.Lerp(Alarm, Watch, Mathf.InverseLerp(AlarmThreshold, WatchThreshold, health));
             }
 
-            return Color.Lerp(Alarm * 0.75f, Alarm, Mathf.InverseLerp(0f, AlarmThreshold, health));
+            // Scale the channels rather than the colour: multiplying a Color also
+            // scales its alpha, which quietly made the worst-affected parts
+            // translucent in their normal, unfocused state.
+            var deep = new Color(Alarm.r * 0.75f, Alarm.g * 0.75f, Alarm.b * 0.75f, Alarm.a);
+            return Color.Lerp(deep, Alarm, Mathf.InverseLerp(0f, AlarmThreshold, health));
         }
 
         /// <summary>0 when nominal, 1 when failed. Drives tremor and alarm volume.</summary>
         public static float Distress(float health) => 1f - Mathf.Clamp01(health);
+
+        /// <summary>The same hue as <see cref="ColorFor"/> at a given opacity.</summary>
+        public static Color ColorFor(float health, float alpha)
+        {
+            Color color = ColorFor(health);
+            color.a = alpha;
+            return color;
+        }
 
         public static string StateFor(float health)
         {

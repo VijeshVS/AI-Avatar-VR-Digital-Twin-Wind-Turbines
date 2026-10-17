@@ -5,6 +5,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 using Vrar.Bootstrap;
+using Vrar.Environment;
 using Vrar.Presentation;
 using Vrar.Turbine;
 
@@ -68,10 +69,11 @@ namespace Vrar.EditorTools
 
             Scene scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
+            EnvironmentAssets.BuildLandscape(ViewerStandpoint());
             BuildEnvironment();
-            BuildGround();
             TurbineRig rig = TurbineFactory.Build();
-            rig.transform.position = Vector3.zero;
+            // Sit the machine on the summit plateau, not at world zero.
+            rig.transform.position = new Vector3(0f, TerrainBuilder.PadHeight, 0f);
 
             GameObject bootstrap = new GameObject("MvpBootstrap");
             bootstrap.AddComponent<MvpBootstrap>();
@@ -109,7 +111,7 @@ namespace Vrar.EditorTools
             GameObject lightObject = new GameObject("Directional Light");
             Light light = lightObject.AddComponent<Light>();
             light.type = LightType.Directional;
-            light.intensity = 1.6f;
+            light.intensity = 1.35f;
             light.color = new Color(1f, 0.97f, 0.9f);
             // Light from behind the default camera so the avatars read front-on.
             lightObject.transform.rotation = Quaternion.LookRotation(
@@ -118,15 +120,15 @@ namespace Vrar.EditorTools
             GameObject fillObject = new GameObject("Fill Light");
             Light fill = fillObject.AddComponent<Light>();
             fill.type = LightType.Directional;
-            fill.intensity = 0.5f;
+            fill.intensity = 0.55f;
             fill.color = new Color(0.72f, 0.82f, 1f);
             fillObject.transform.rotation = Quaternion.LookRotation(
                 new Vector3(0f, 80f, 0f) - new Vector3(-240f, 140f, -180f), Vector3.up);
 
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor = new Color(0.46f, 0.51f, 0.58f);
-            RenderSettings.ambientEquatorColor = new Color(0.30f, 0.31f, 0.32f);
-            RenderSettings.ambientGroundColor = new Color(0.14f, 0.15f, 0.15f);
+            RenderSettings.ambientSkyColor = new Color(0.52f, 0.57f, 0.64f);
+            RenderSettings.ambientEquatorColor = new Color(0.34f, 0.35f, 0.36f);
+            RenderSettings.ambientGroundColor = new Color(0.18f, 0.19f, 0.19f);
         }
 
         /// <summary>
@@ -135,6 +137,24 @@ namespace Vrar.EditorTools
         /// turbine is 142 m from tower foot to blade tip, so anything closer crops
         /// the rotor out of frame.
         /// </summary>
+        /// <summary>
+        /// Where <see cref="FrameViewer"/> puts the camera, solved without touching
+        /// the scene. The landscape is generated before the viewer exists, and it
+        /// needs this to keep the foreground clear.
+        /// </summary>
+        public static Vector3 ViewerStandpoint()
+        {
+            float bladeTip = TurbineFactory.HubHeight + 1.5f + TurbineFactory.RotorRadius;
+            var focus = new Vector3(0f, TerrainBuilder.PadHeight + bladeTip * 0.45f, 0f);
+
+            float distance = SolveFramingDistance(bladeTip, DefaultFov) * LandscapePullback;
+            var direction = new Vector3(0.56f, 0f, 0.83f).normalized;
+            Vector3 feet = focus + direction * distance;
+            float groundHeight = Mathf.Max(TerrainBuilder.PadHeight,
+                TerrainBuilder.HeightAt(feet.x, feet.z));
+            return new Vector3(feet.x, groundHeight, feet.z);
+        }
+
         public static GameObject BuildViewer()
         {
             GameObject rig = new GameObject("DesktopRig");
@@ -149,7 +169,9 @@ namespace Vrar.EditorTools
             cameraObject.transform.SetParent(head.transform, false);
 
             Camera camera = cameraObject.AddComponent<Camera>();
-            camera.clearFlags = CameraClearFlags.SolidColor;
+            // Skybox, not a flat colour: SolidColor here was hiding the HDRI that
+            // the landscape is lit and framed against.
+            camera.clearFlags = CameraClearFlags.Skybox;
             camera.backgroundColor = new Color(0.55f, 0.68f, 0.82f);
             camera.fieldOfView = 60f;
             camera.nearClipPlane = 0.1f;
@@ -175,7 +197,7 @@ namespace Vrar.EditorTools
         {
             float bladeTip = TurbineFactory.HubHeight + 1.5f + TurbineFactory.RotorRadius;
             float fov = camera != null ? camera.fieldOfView : DefaultFov;
-            var focus = new Vector3(0f, bladeTip * 0.48f, 0f);
+            var focus = new Vector3(0f, TerrainBuilder.PadHeight + bladeTip * 0.45f, 0f);
 
             float distance = SolveFramingDistance(bladeTip, fov);
             if (!RotorFitsHorizontally(distance, fov))
@@ -184,10 +206,23 @@ namespace Vrar.EditorTools
                            Mathf.Tan(HorizontalFov(fov, ConservativeAspect) * 0.5f * Mathf.Deg2Rad) * 1.15f;
             }
 
+            // Pull back past the turbine-only framing so the landscape reads as
+            // context. A fixed multiple rather than a second solver: the turbine
+            // stays the subject at roughly half the frame height, with ridges and
+            // treeline behind it.
+            distance *= LandscapePullback;
+
             // Three-quarter view from the lit side, standing on the ground.
             var direction = new Vector3(0.56f, 0f, 0.83f).normalized;
             Vector3 feet = focus + direction * distance;
-            rig.transform.position = new Vector3(feet.x, 0f, feet.z);
+            // Stand on the terrain, but never below the plateau the machine is on:
+            // a camera down in the valley cannot see the drive train.
+            float groundHeight = Mathf.Max(
+                TerrainBuilder.PadHeight,
+                TerrainBuilder.HeightAt(feet.x, feet.z));
+            var ground = new Vector3(feet.x, groundHeight - 0.6f, feet.z);
+
+            rig.transform.position = ground;
 
             Vector3 eye = rig.transform.position + Vector3.up * ViewerEyeHeight;
             rig.transform.rotation = Quaternion.LookRotation((focus - eye).normalized, Vector3.up);
@@ -236,6 +271,7 @@ namespace Vrar.EditorTools
         }
 
         private const float DefaultFov = 60f;
+        private const float LandscapePullback = 1.45f;
         private const float TargetFill = 0.70f;
         private const float ConservativeAspect = 4f / 3f;
         private const float ViewerEyeHeight = 1.7f;
@@ -247,7 +283,7 @@ namespace Vrar.EditorTools
         /// </summary>
         public static void FrameViewerOnNacelle(GameObject rig)
         {
-            var focus = new Vector3(0f, TurbineFactory.HubHeight + 2.2f, 1.2f);
+            var focus = new Vector3(0f, TerrainBuilder.PadHeight + TurbineFactory.HubHeight + 2.2f, 1.2f);
             // From behind the rotor: looking forward would put a 60 m blade
             // between the camera and the drive train, whatever the rotor azimuth.
             var offset = new Vector3(0.45f, 0.16f, -0.88f).normalized * 30f;
@@ -272,9 +308,5 @@ namespace Vrar.EditorTools
             Debug.Log($"[VRAR] viewer re-framed at {viewer.transform.position}");
         }
 
-        private static void BuildGround()
-        {
-            TurbineFactory.BuildGround();
-        }
     }
 }
