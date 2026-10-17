@@ -22,10 +22,11 @@ Shader "VRAR/TerrainBlend"
         _GrassTile ("Grass Tile (m)", Float) = 22
         _RockTile ("Rock Tile (m)", Float) = 26
         _DirtTile ("Dirt Tile (m)", Float) = 34
-        _NormalStrength ("Normal Strength", Range(0, 2)) = 0.85
+        _NormalStrength ("Normal Strength", Range(0, 2)) = 1.35
         _MacroScale ("Macro Variation Scale", Float) = 0.0035
-        _MacroStrength ("Macro Variation", Range(0, 1)) = 0.22
-        _GrassTint ("Grass Tint", Color) = (0.78, 1.18, 0.48)
+        _MacroStrength ("Macro Variation", Range(0, 1)) = 0.32
+        _GrassTint ("Grass Tint", Color) = (0.72, 1.05, 0.46)
+        _RockTint ("Rock Tint", Color) = (0.92, 0.94, 0.98)
         _BaseY ("Base Y", Float) = 0
     }
 
@@ -62,6 +63,7 @@ Shader "VRAR/TerrainBlend"
                 float4 _GrassNormal_ST, _RockNormal_ST, _DirtNormal_ST;
                 float _GrassTile, _RockTile, _DirtTile;
                 float4 _GrassTint;
+                float4 _RockTint;
                 float _NormalStrength, _MacroScale, _MacroStrength, _BaseY;
             CBUFFER_END
 
@@ -126,7 +128,7 @@ Shader "VRAR/TerrainBlend"
                 if (weights.g > 0.001)
                 {
                     float2 uvr = uv / _RockTile;
-                    albedo += SAMPLE_TEXTURE2D(_RockDiff, sampler_RockDiff, uvr).rgb * weights.g;
+                    albedo += SAMPLE_TEXTURE2D(_RockDiff, sampler_RockDiff, uvr).rgb * _RockTint.rgb * weights.g;
                     detail += UnpackDetail(SAMPLE_TEXTURE2D(_RockNormal, sampler_RockNormal, uvr)) * weights.g;
                 }
 
@@ -142,6 +144,9 @@ Shader "VRAR/TerrainBlend"
                 // source of cheap low-frequency noise.
                 float3 macro = SAMPLE_TEXTURE2D(_GrassDiff, sampler_GrassDiff, uv * _MacroScale).rgb;
                 albedo = lerp(albedo, albedo * macro * 2.0, _MacroStrength);
+
+                // Baked occlusion arrives in vertex colour alpha.
+                albedo *= input.weights.a;
 
                 float3 normalTS = normalize(detail);
 

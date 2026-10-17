@@ -23,11 +23,27 @@ namespace Vrar.Environment
             Walk
         }
 
+        /// <summary>
+        /// Ground footprint of the built body in its own local units, before scale.
+        ///
+        /// Muzzle to tail is about 2.2 units and the legs swing out to roughly 0.33
+        /// either side, so the length dominates. This is what the crowd solver treats
+        /// as the animal's solid radius: two animals overlap exactly when the distance
+        /// between their origins drops below the sum of theirs.
+        /// </summary>
+        public const float FootprintRadius = 1.2f;
+
         [SerializeField, Min(0.1f)] private float _walkSpeed = 1.4f;
         [SerializeField, Min(0f)] private float _homeRadius = 90f;
         [SerializeField, Min(0.05f)] private float _turnRate = 110f;
         [SerializeField] private Vector3 _home;
+        [SerializeField, Min(0f)] private float _footprint = FootprintRadius;
         [SerializeField] private int _seed = 1;
+
+        private static readonly List<Animal> Registry = new List<Animal>(64);
+
+        /// <summary>Reused across animals so the prop query allocates nothing per frame.</summary>
+        private static readonly List<int> PropHits = new List<int>(32);
 
         private Transform[] _legs = new Transform[4];
         private Transform _head;
@@ -39,8 +55,30 @@ namespace Vrar.Environment
         private float _grazeAmount;
         private System.Random _random;
 
+        /// <summary>Animals currently in the scene, for the crowd solver to resolve.</summary>
+        public static IReadOnlyList<Animal> Active => Registry;
+
+        /// <summary>
+        /// Drop destroyed animals. OnDisable covers the ordinary teardown; this is
+        /// the backstop for a scene teardown that skipped it, so the solver cannot
+        /// dereference a dead entry and stop resolving the whole herd.
+        /// </summary>
+        public static void Prune()
+        {
+            for (int i = Registry.Count - 1; i >= 0; i--)
+            {
+                if (Registry[i] == null)
+                {
+                    Registry.RemoveAt(i);
+                }
+            }
+        }
+
+        /// <summary>World-space solid radius. Twice this is the gap to the next animal.</summary>
+        public float Footprint => _footprint;
+
         public static Animal Spawn(Transform parent, Vector3 position, float scale,
-            Color bodyColour, float walkSpeed, int seed)
+            Color bodyColour, float walkSpeed, int seed, Vector3 home, float homeRadius)
         {
             var holder = new GameObject("Animal");
             holder.transform.SetParent(parent, false);
@@ -51,7 +89,9 @@ namespace Vrar.Environment
             var animal = holder.AddComponent<Animal>();
             animal._walkSpeed = walkSpeed;
             animal._seed = seed;
-            animal._home = position;
+            animal._home = home;
+            animal._homeRadius = homeRadius;
+            animal._footprint = FootprintRadius * scale;
             animal.BuildBody(bodyColour);
             animal.ResetWander(seed);
             return animal;
@@ -61,6 +101,10 @@ namespace Vrar.Environment
         {
             _random = new System.Random(_seed == 0 ? 1 : _seed);
         }
+
+        private void OnEnable() => Registry.Add(this);
+
+        private void OnDisable() => Registry.Remove(this);
 
         private void Update()
         {
@@ -134,6 +178,96 @@ namespace Vrar.Environment
 
         private Vector3 target3D() => new Vector3(_target.x, transform.position.y, _target.z);
 
+        #region Crowd constraints
+
+        /// <summary>
+        /// Pull an animal back inside its herd's range. A herd that has drifted off
+        /// its pasture would otherwise wander into the next one and the two would
+        /// spend the rest of the session shoving. Run before separation, so
+        /// separation always has the last word on overlap.
+        /// </summary>
+        public void ConstrainToRange()
+        {
+            float limit = _homeRadius + _footprint;
+            var offset = transform.position - _home;
+            offset.y = 0f;
+
+            if (offset.sqrMagnitude <= limit * limit)
+            {
+                return;
+            }
+
+            offset.Normalize();
+            transform.position = new Vector3(
+                _home.x + offset.x * limit,
+                transform.position.y,
+                _home.z + offset.z * limit);
+        }
+
+        /// <summary>
+        /// Conifers and boulders are solid, so an animal that walks into one is
+        /// projected back out rather than standing inside its trunk.
+        /// </summary>
+        public void ResolveAgainstProps()
+        {
+            Vector3 position = transform.position;
+
+            if (!ObstacleField.Query(position, _footprint, PropHits))
+            {
+                return;
+            }
+
+            for (int i = 0; i < PropHits.Count; i++)
+            {
+                position += ObstacleField.Separation(position, _footprint, PropHits[i]);
+            }
+
+            transform.position = position;
+        }
+
+        /// <summary>Re-sit on the terrain after being displaced.</summary>
+        public void Reground()
+        {
+            transform.position = new Vector3(
+                transform.position.x,
+                TerrainBuilder.HeightAt(transform.position.x, transform.position.z),
+                transform.position.z);
+        }
+
+        /// <summary>
+        /// One projection step between two overlapping animals. Split evenly so a
+        /// pair does not creep in one direction, and applied as a position change
+        /// rather than a velocity change so it cannot be outrun by the walk.
+        /// </summary>
+        public static void Separate(Animal a, Animal b)
+        {
+            float reach = a._footprint + b._footprint;
+            Vector3 offset = a.transform.position - b.transform.position;
+            offset.y = 0f;
+
+            float distance = offset.magnitude;
+            if (distance >= reach)
+            {
+                return;
+            }
+
+            if (distance < 1e-4f)
+            {
+                // Exactly coincident has no direction to push along. Derive one from
+                // the seeds so the pair always splits the same way, rather than
+                // jittering on floating point noise every frame.
+                float angle = ((a._seed * 37f + b._seed * 71f) % 360f) * Mathf.Deg2Rad;
+                offset = new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle)) * 1e-4f;
+                distance = 1e-4f;
+            }
+
+            Vector3 push = offset / distance * ((reach - distance) * 0.5f);
+            a.transform.position += push;
+            b.transform.position -= push;
+        }
+
+        #endregion
+
         /// <summary>
         /// Diagonal gait — the front-left and rear-right legs swing together,
         /// which is what a quadruped actually does. Phase is driven by distance
@@ -177,29 +311,44 @@ namespace Vrar.Environment
             }
         }
 
+        /// <summary>
+        /// Body, head, legs and tail.
+        ///
+        /// Two materials rather than one: a flat single-tone animal reads as a
+        /// grey blob at any distance, and the contrast at the leg/head boundary
+        /// and along the back is most of what makes the silhouette legible.
+        /// </summary>
         private void BuildBody(Color bodyColour)
         {
-            Material material = LivestockMaterial(bodyColour);
+            Material coat = LivestockMaterial(bodyColour);
+            Material dark = LivestockMaterial(bodyColour * 0.52f);
+            Material feature = LivestockMaterial(new Color(0.06f, 0.05f, 0.05f));
 
             var body = new GameObject("Body");
             body.transform.SetParent(transform, false);
             body.transform.localPosition = new Vector3(0f, 1.05f, 0f);
             _bodyRest = body.transform.localPosition;
 
-            AddBox(body.transform, new Vector3(0f, 0f, 0f), new Vector3(0.62f, 0.62f, 1.35f), material);
-            AddBox(body.transform, new Vector3(0f, 0.28f, -0.55f), new Vector3(0.5f, 0.36f, 0.5f), material);
+            // Torso, with a darker saddle over the spine.
+            AddBox(body.transform, new Vector3(0f, 0f, 0f), new Vector3(0.62f, 0.62f, 1.35f), coat);
+            AddBox(body.transform, new Vector3(0f, 0.22f, -0.1f), new Vector3(0.55f, 0.26f, 1.1f), dark);
+            AddBox(body.transform, new Vector3(0f, 0.28f, -0.55f), new Vector3(0.5f, 0.36f, 0.5f), coat);
 
             // Neck and head as a separate pivot so grazing can dip them.
             var neck = new GameObject("Neck");
             neck.transform.SetParent(body.transform, false);
             neck.transform.localPosition = new Vector3(0f, 0.2f, 0.6f);
 
-            AddBox(neck.transform, new Vector3(0f, 0.28f, 0.18f), new Vector3(0.26f, 0.62f, 0.3f), material);
-            AddBox(neck.transform, new Vector3(0f, 0.62f, 0.34f), new Vector3(0.28f, 0.3f, 0.52f), material);
+            AddBox(neck.transform, new Vector3(0f, 0.28f, 0.18f), new Vector3(0.26f, 0.62f, 0.3f), coat);
+            AddBox(neck.transform, new Vector3(0f, 0.62f, 0.34f), new Vector3(0.28f, 0.3f, 0.52f), coat);
+            // Muzzle and eyes: the three marks that make a block read as a face.
+            AddBox(neck.transform, new Vector3(0f, 0.55f, 0.58f), new Vector3(0.2f, 0.16f, 0.16f), dark);
             foreach (int side in new[] { -1, 1 })
             {
+                AddBox(neck.transform, new Vector3(side * 0.145f, 0.66f, 0.44f),
+                    new Vector3(0.03f, 0.06f, 0.05f), feature);
                 AddBox(neck.transform, new Vector3(side * 0.17f, 0.55f, 0.72f),
-                    new Vector3(0.05f, 0.16f, 0.1f), material);
+                    new Vector3(0.05f, 0.16f, 0.1f), coat);
             }
 
             _head = neck.transform;
@@ -214,14 +363,17 @@ namespace Vrar.Environment
                 var leg = new GameObject($"Leg{i}");
                 leg.transform.SetParent(body.transform, false);
                 leg.transform.localPosition = new Vector3(x, -0.18f, z);
-                AddBox(leg.transform, new Vector3(0f, -0.32f, 0f), new Vector3(0.16f, 0.66f, 0.18f), material);
+                AddBox(leg.transform, new Vector3(0f, -0.32f, 0f), new Vector3(0.16f, 0.66f, 0.18f), coat);
+                // Hoof: a dark band at the ground, which is what stops the legs
+                // reading as sticks vanishing into the grass.
+                AddBox(leg.transform, new Vector3(0f, -0.62f, 0f), new Vector3(0.18f, 0.12f, 0.2f), dark);
                 _legs[i] = leg.transform;
             }
 
             var tail = new GameObject("Tail");
             tail.transform.SetParent(body.transform, false);
             tail.transform.localPosition = new Vector3(0f, 0.18f, -0.76f);
-            AddBox(tail.transform, new Vector3(0f, -0.14f, -0.06f), new Vector3(0.08f, 0.34f, 0.08f), material);
+            AddBox(tail.transform, new Vector3(0f, -0.14f, -0.06f), new Vector3(0.08f, 0.34f, 0.08f), dark);
         }
 
         private static readonly Dictionary<Color, Material> MaterialCache = new Dictionary<Color, Material>();
@@ -244,6 +396,11 @@ namespace Vrar.Environment
             if (material.HasProperty("_Smoothness"))
             {
                 material.SetFloat("_Smoothness", 0.12f);
+            }
+
+            if (material.HasProperty("_Metallic"))
+            {
+                material.SetFloat("_Metallic", 0f);
             }
 
             MaterialCache[colour] = material;

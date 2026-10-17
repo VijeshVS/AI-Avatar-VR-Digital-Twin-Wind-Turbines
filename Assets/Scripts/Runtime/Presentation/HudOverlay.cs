@@ -72,6 +72,7 @@ namespace Vrar.Presentation
         private const float SwitcherDotSize = 12f;
         private const float MetricPadY = 6f;
         private const float ViewportMargin = 24f;
+        private const int BigFontSize = 44;
 
         // Fractions of the factor table width. They sum to 1, so the table always
         // ends flush with the panel edge and no column can be pushed off it.
@@ -107,6 +108,12 @@ namespace Vrar.Presentation
         private GUIStyle _metricValue;
         private GUIStyle _hint;
 
+        /// <summary>
+        /// A colourless twin of the headline style, so <see cref="Measure"/> can size
+        /// the headline before it knows which health band the component is in.
+        /// </summary>
+        private GUIStyle _bigProbe;
+
         public ComponentFocus Focus => _focus;
 
         /// <summary>Panel width, capped so it never runs off a narrow Game view.</summary>
@@ -139,7 +146,10 @@ namespace Vrar.Presentation
             public float Big;
             public float Reason;
             public float Metrics;
+            public float MetricLabel;
+            public float MetricValue;
             public float TableHeader;
+            public float FactorText;
             public float FactorRow;
             public float SwitcherItem;
             public float Switcher;
@@ -430,11 +440,13 @@ namespace Vrar.Presentation
             GUI.DrawTexture(plate, Texture2D.whiteTexture);
             GUI.color = previous;
 
-            GUI.Label(new Rect(plate.x + MetricPadY * 2f, plate.y + MetricPadY, plate.width, _metricLabel.CalcHeight(
-                new GUIContent(label), plate.width)), label, _metricLabel);
-            GUI.Label(new Rect(plate.x + MetricPadY * 2f, plate.y + MetricPadY + _metricLabel.CalcHeight(
-                new GUIContent(label), plate.width), plate.width, plate.height - MetricPadY * 2f
-                - _metricLabel.CalcHeight(new GUIContent(label), plate.width)), value, _metricValue);
+            // Both heights come from Layout, measured once against this tile's width.
+            // Re-measuring here is what let the two passes disagree.
+            float textX = plate.x + MetricPadY * 2f;
+            float textWidth = plate.width - MetricPadY * 2f;
+            GUI.Label(new Rect(textX, plate.y + MetricPadY, textWidth, layout.MetricLabel), label, _metricLabel);
+            GUI.Label(new Rect(textX, plate.y + MetricPadY + layout.MetricLabel, textWidth, layout.MetricValue),
+                value, _metricValue);
         }
 
         private void DrawFactorTable(Layout layout, Telemetry.FactorPayload[] factors, float y)
@@ -474,7 +486,7 @@ namespace Vrar.Presentation
 
             float cursor = layout.X;
             float w = layout.Inner;
-            float textHeight = layout.FactorRow - BarGap - 6f;
+            float textHeight = layout.FactorText;
 
             GUI.Label(new Rect(cursor, y, w * SignalColumn, textHeight), factor.signal, _detail);
             cursor += w * SignalColumn;
@@ -576,14 +588,20 @@ namespace Vrar.Presentation
                 Section = _section.CalcHeight(new GUIContent(ComponentsSection), inner),
                 Row = RowHeight(),
                 Summary = _caption.CalcHeight(new GUIContent("worst Gearbox 4%"), inner),
-                Big = _caption.CalcHeight(new GUIContent("100%"), inner) * 2f,
+                Big = _bigProbe.CalcHeight(new GUIContent("100%"), inner * 0.35f),
                 Reason = _detail.CalcHeight(new GUIContent(ReasonText(null)), inner),
                 TableHeader = _tableHeader.CalcHeight(new GUIContent("SIGNAL"), inner),
                 Hint = _hint.CalcHeight(new GUIContent(HintText(_focus.HasFocus)), inner),
             };
 
-            layout.Metrics = MetricHeight();
-            layout.FactorRow = FactorRowHeight();
+            layout.MetricLabel = _metricLabel.CalcHeight(
+                new GUIContent("TOP FACTOR SHARE"), layout.Inner / 3f - SwitcherGap);
+            layout.MetricValue = _metricValue.CalcHeight(
+                new GUIContent("0.00 mm/s"), layout.Inner / 3f - SwitcherGap);
+            layout.Metrics = MetricHeight(layout.MetricLabel, layout.MetricValue);
+            layout.FactorText = _detail.CalcHeight(
+                new GUIContent("blade vibration 4.70 mm/s"), layout.Inner * SignalColumn);
+            layout.FactorRow = FactorRowHeight(layout.FactorText);
             layout.SwitcherItem = _caption.CalcHeight(new GUIContent("1 Blade Set 100%"), inner / SwitcherColumns)
                                  + SwitcherPadY * 2f;
             int switcherRows = Mathf.Max(1, Mathf.CeilToInt(componentCount / SwitcherColumns));
@@ -610,9 +628,15 @@ namespace Vrar.Presentation
             return layout;
         }
 
-        private static float MetricHeight()
+        /// <summary>
+        /// Height of one metric tile: label, value and the air either side. Measured
+        /// from the styles in use. The value used to be handed a nine-pixel rect
+        /// against a twenty-pixel font, so every tile showed its label and clipped
+        /// its reading away entirely.
+        /// </summary>
+        private static float MetricHeight(float labelHeight, float valueHeight)
         {
-            return 20f + MetricPadY * 2f + 4f;
+            return MetricPadY + labelHeight + valueHeight + MetricPadY;
         }
 
         /// <summary>Height of one overview row: label and bar, then the reason line.</summary>
@@ -623,10 +647,17 @@ namespace Vrar.Presentation
             return Mathf.Max(labelHeight, BarHeight) + BarGap + captionHeight + BlockGap;
         }
 
-        /// <summary>Height of one factor row: its text and its severity bar.</summary>
-        private static float FactorRowHeight()
+        /// <summary>
+        /// Height of one factor row: its text and its severity bar.
+        ///
+        /// The text height has to come from the style, not from the row. A fixed
+        /// twenty-two pixel row gave the sixteen-pixel detail style an eleven pixel
+        /// rect, which IMGUI clips — the signal names came out sliced through the
+        /// middle instead of unreadable-but-complete.
+        /// </summary>
+        private static float FactorRowHeight(float textHeight)
         {
-            return 22f;
+            return Mathf.Max(textHeight, SeverityBarHeight) + BarGap * 2f;
         }
 
         // The headline percentage is coloured per health band, so it needs a style
@@ -640,7 +671,7 @@ namespace Vrar.Presentation
                 return cached;
             }
 
-            var style = Make(44, FontStyle.Bold, color);
+            var style = Make(BigFontSize, FontStyle.Bold, color);
             _bigStyles[hash] = style;
             return style;
         }
@@ -756,6 +787,7 @@ namespace Vrar.Presentation
             _metricLabel = Make(12, FontStyle.Bold, Faint);
             _metricValue = Make(20, FontStyle.Normal, Color.white);
             _hint = Make(15, FontStyle.Normal, Faint);
+            _bigProbe = Make(BigFontSize, FontStyle.Bold, Color.white);
         }
 
         private static GUIStyle Make(int size, FontStyle style, Color color)

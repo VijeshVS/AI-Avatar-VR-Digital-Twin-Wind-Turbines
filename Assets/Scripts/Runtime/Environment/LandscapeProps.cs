@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace Vrar.Environment
 {
@@ -56,6 +57,21 @@ namespace Vrar.Environment
         private const int ConiferCount = 700;
         private const int BoulderCount = 260;
 
+        /// <summary>
+        /// Rejection sampling that has to clear terrain, clearances, density falloff
+        /// and prop spacing will accept far fewer than one in every attempt, so every
+        /// pass gets several attempts per prop it wants to place. Without the
+        /// multiplier, adding the spacing test would silently thin the treeline.
+        /// </summary>
+        private const int AttemptsPerProp = 6;
+
+        /// <summary>
+        /// Gap forced between two neighbouring footprints, as a fraction of the
+        /// distance that would just touch. Above one so crowns do not brush, which
+        /// is what makes the treeline read as separate trees.
+        /// </summary>
+        private const float SpacingFactor = 1.05f;
+
         /// <param name="site">World origin: the foundation pad, kept clear.</param>
         /// <param name="viewpoint">
         /// Where the camera stands. Cleared as well, or a 20 m conifer two metres
@@ -67,18 +83,39 @@ namespace Vrar.Environment
         {
             var holder = new GameObject("Landscape");
 
+            // Both passes report into the same field, so the boulder pass also knows
+            // where the conifers went and cannot bury one in a rock.
+            ObstacleField.Clear();
+
             if (foliage != null || bark != null)
             {
-                Scatter(holder.transform, foliage, bark, ConiferCount, BuildConifer, WantsTree, 240f, viewpoint);
+                Scatter(holder.transform, foliage, bark, ConiferCount, BuildConifer, WantsTree, 240f,
+                    viewpoint, ConiferFootprint, (int)Seed);
             }
 
             if (rock != null)
             {
-                Scatter(holder.transform, rock, null, BoulderCount, BuildBoulder, WantsBoulder, 190f, viewpoint);
+                // A different seed per pass. Sharing one made every pass draw the
+                // same candidate sequence, so boulders were only ever tested at
+                // positions the conifers had already tried.
+                Scatter(holder.transform, rock, null, BoulderCount, BuildBoulder, WantsBoulder, 190f,
+                    viewpoint, BoulderFootprint, (int)Seed + 1);
             }
+
+            var footprints = holder.AddComponent<LandscapeFootprints>();
+            footprints.Capture();
 
             return holder;
         }
+
+        /// <summary>
+        /// Ground footprint of a conifer: the widest cone tier, which is the lower
+        /// canopy at y = 11 with a 9 unit radius before scaling.
+        /// </summary>
+        private static float ConiferFootprint(float scale) => 4.5f * scale;
+
+        /// <summary>Ground footprint of a boulder, the widest axis of the squashed sphere.</summary>
+        private static float BoulderFootprint(float scale) => 0.6f * scale;
 
         /// <summary>
         /// Rejection-sample positions, then emit combined meshes. One draw call
@@ -86,51 +123,83 @@ namespace Vrar.Environment
         /// </summary>
         private static void Scatter(Transform parent, Material primary, Material secondary, int count,
             ShapeBuilder shape, System.Func<float, float, float, bool> wants, float siteClear,
-            Vector3 viewpoint)
+            Vector3 viewpoint, System.Func<float, float> footprint, int seed)
         {
             var batches = new Batches();
-            var random = new System.Random((int)Seed);
+            var random = new System.Random(seed);
+            var nearby = new List<int>(16);
 
             for (int i = 0; i < count; i++)
             {
-                float x = (float)(random.NextDouble() * 2.0 - 1.0) * PropExtent;
-                float z = (float)(random.NextDouble() * 2.0 - 1.0) * PropExtent;
-                float distance = Mathf.Sqrt(x * x + z * z);
-
-                // Keep the foundation pad and its apron clear.
-                if (distance < siteClear)
+                for (int attempt = 0; attempt < AttemptsPerProp; attempt++)
                 {
-                    continue;
+                    float x = (float)(random.NextDouble() * 2.0 - 1.0) * PropExtent;
+                    float z = (float)(random.NextDouble() * 2.0 - 1.0) * PropExtent;
+                    float distance = Mathf.Sqrt(x * x + z * z);
+
+                    // Keep the foundation pad and its apron clear.
+                    if (distance < siteClear)
+                    {
+                        continue;
+                    }
+
+                    float fromViewpoint = (x - viewpoint.x) * (x - viewpoint.x) +
+                                          (z - viewpoint.z) * (z - viewpoint.z);
+                    if (fromViewpoint < ViewpointClearRadius * ViewpointClearRadius)
+                    {
+                        continue;
+                    }
+
+                    float y = TerrainBuilder.HeightAt(x, z);
+                    float slope = Slope(x, z);
+                    TerrainBuilder.WeightsAt(x, z, out float grass, out float rockWeight, out _);
+
+                    if (!wants(grass, rockWeight, slope))
+                    {
+                        continue;
+                    }
+
+                    // Thin with distance so the near field reads dense and the horizon
+                    // sparse, which is how a real treeline falls away.
+                    float density = Mathf.Lerp(1f, 0.30f, Mathf.InverseLerp(300f, PropExtent, distance));
+                    if (random.NextDouble() > density)
+                    {
+                        continue;
+                    }
+
+                    var position = new Vector3(x, y - 0.5f, z);
+                    float scale = Mathf.Lerp(0.55f, 0.95f, (float)random.NextDouble());
+                    float rotation = (float)random.NextDouble() * 360f;
+
+                    // The spacing test needs the final scale, which is only known
+                    // after the density roll, so it cannot be folded into the loop
+                    // conditions above.
+                    float radius = footprint(scale);
+                    if (ObstacleField.Query(position, radius, nearby))
+                    {
+                        bool blocked = false;
+                        for (int h = 0; h < nearby.Count; h++)
+                        {
+                            float reach = (radius + ObstacleField.Radius(nearby[h])) * SpacingFactor;
+                            float dx = position.x - ObstacleField.Position(nearby[h]).x;
+                            float dz = position.z - ObstacleField.Position(nearby[h]).z;
+                            if (dx * dx + dz * dz < reach * reach)
+                            {
+                                blocked = true;
+                                break;
+                            }
+                        }
+
+                        if (blocked)
+                        {
+                            continue;
+                        }
+                    }
+
+                    ObstacleField.Add(position, radius);
+                    shape(batches, position, scale, rotation);
+                    break;
                 }
-
-                float fromViewpoint = (x - viewpoint.x) * (x - viewpoint.x) +
-                                      (z - viewpoint.z) * (z - viewpoint.z);
-                if (fromViewpoint < ViewpointClearRadius * ViewpointClearRadius)
-                {
-                    continue;
-                }
-
-                float y = TerrainBuilder.HeightAt(x, z);
-                float slope = Slope(x, z);
-                TerrainBuilder.WeightsAt(x, z, out float grass, out float rockWeight, out _);
-
-                if (!wants(grass, rockWeight, slope))
-                {
-                    continue;
-                }
-
-                // Thin with distance so the near field reads dense and the horizon
-                // sparse, which is how a real treeline falls away.
-                float density = Mathf.Lerp(1f, 0.30f, Mathf.InverseLerp(300f, PropExtent, distance));
-                if (random.NextDouble() > density)
-                {
-                    continue;
-                }
-
-                var position = new Vector3(x, y - 0.5f, z);
-                float scale = Mathf.Lerp(0.55f, 0.95f, (float)random.NextDouble());
-                float rotation = (float)random.NextDouble() * 360f;
-                shape(batches, position, scale, rotation);
             }
 
             Emit(parent, primary, batches.Primary, "foliage");
@@ -148,6 +217,20 @@ namespace Vrar.Environment
             }
 
             var combined = new Mesh { name = material.name + "_" + suffix };
+
+            // Wide enough for the whole treeline in one index format. CombineMeshes
+            // merges into the target mesh's format, and a fresh Mesh defaults to
+            // UInt16, which caps the batch at 65535 vertices and throws.
+            int vertices = 0;
+            for (int i = 0; i < parts.Count; i++)
+            {
+                if (parts[i].mesh != null)
+                {
+                    vertices += parts[i].mesh.vertexCount;
+                }
+            }
+
+            combined.indexFormat = vertices > 65535 ? IndexFormat.UInt32 : IndexFormat.UInt16;
             combined.CombineMeshes(parts.ToArray(), true, true);
             combined.RecalculateBounds();
 
