@@ -93,6 +93,29 @@ namespace Vrar.Environment
             grass = Mathf.Clamp01(1f - rock - dirt);
         }
 
+        /// <summary>
+        /// Cheap baked occlusion: compare a point's height against its
+        /// surroundings. Ground that sits below its neighbourhood is in a hollow
+        /// and is darkened; ground that stands above it catches light.
+        /// </summary>
+        public static float OcclusionAt(float x, float z, float height)
+        {
+            const float radius = 26f;
+            float average = 0f;
+            for (int i = 0; i < 4; i++)
+            {
+                float angle = i * Mathf.PI * 0.5f;
+                average += HeightAt(x + Mathf.Cos(angle) * radius, z + Mathf.Sin(angle) * radius);
+            }
+
+            average *= 0.25f;
+
+            // Positive when the neighbourhood stands above this point.
+            float relative = height - average;
+            float occlusion = Mathf.Clamp01(0.5f - relative * 0.06f);
+            return Mathf.Lerp(0.55f, 1f, occlusion);
+        }
+
         private static float SlopeAt(float x, float z)
         {
             const float epsilon = 6f;
@@ -128,7 +151,11 @@ namespace Vrar.Environment
                     normals[index] = new Vector3(-dx, 2f * epsilon, -dz).normalized;
 
                     WeightsAt(wx, wz, out float grass, out float rock, out float dirt);
-                    colors[index] = new Color(grass, rock, dirt, 1f);
+                    // Alpha carries baked ambient occlusion. Without it the
+                    // terrain reads as a flat wash: the normals change but there
+                    // is no shading in the hollows, which is what actually
+                    // separates a valley from the ridge beside it.
+                    colors[index] = new Color(grass, rock, dirt, OcclusionAt(wx, wz, height));
                 }
             }
 

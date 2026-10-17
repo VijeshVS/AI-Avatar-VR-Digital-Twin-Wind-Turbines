@@ -21,6 +21,15 @@ namespace Vrar.EditorTools
         public const string TerrainShaderName = "VRAR/TerrainBlend";
         public const string GrassShaderName = "VRAR/GrassWind";
 
+        /// <summary>Grass budget. Tufts x 3 blades x 4 triangles is the cost.</summary>
+        private const int GrassTufts = 20000;
+
+        /// <summary>How far out from the site grass is placed, in metres.</summary>
+        private const float GrassReach = 850f;
+
+        /// <summary>Distance at which grass density has halved.</summary>
+        private const float GrassFalloff = 110f;
+
         private static readonly string[] GrassMaterials = { "grass_ground_diff" };
         private static readonly string[] RockMaterials = { "aerial_rocks_04_diff" };
         private static readonly string[] DirtMaterials = { "brown_mud_02_diff" };
@@ -121,7 +130,10 @@ namespace Vrar.EditorTools
             // Poly Haven's grass_ground is dry, straw-coloured upland grass, which
             // reads as bare soil next to the rock. Tinting it back toward green is
             // cheaper and more controllable than hunting for another map.
-            material.SetColor("_GrassTint", new Color(0.78f, 1.18f, 0.48f));
+            material.SetColor("_GrassTint", new Color(0.72f, 1.05f, 0.46f));
+            material.SetColor("_RockTint", new Color(0.92f, 0.94f, 0.98f));
+            material.SetFloat("_NormalStrength", 1.35f);
+            material.SetFloat("_MacroStrength", 0.32f);
 
             Assign(material, "_GrassDiff", GrassMaterials);
             Assign(material, "_RockDiff", RockMaterials);
@@ -162,8 +174,10 @@ namespace Vrar.EditorTools
             }
 
             var material = new Material(shader) { name = "GrassWind" };
-            material.SetColor("_BaseColor", new Color(0.24f, 0.36f, 0.14f, 1f));
-            material.SetColor("_TipColor", new Color(0.44f, 0.58f, 0.24f, 1f));
+            // Olive rather than saturated green: at this density a vivid green
+            // vibrates against the terrain texture underneath it.
+            material.SetColor("_BaseColor", new Color(0.21f, 0.28f, 0.13f, 1f));
+            material.SetColor("_TipColor", new Color(0.40f, 0.47f, 0.24f, 1f));
             material.SetFloat("_WindStrength", 0.55f);
             material.SetFloat("_WindSpeed", 1.4f);
             material.SetVector("_WindDirection", new Vector4(0.82f, 0f, 0.57f, 0f));
@@ -172,8 +186,11 @@ namespace Vrar.EditorTools
             // sized to read from the overview camera rather than to look right
             // underfoot.
             material.SetFloat("_BladeHeight", 1.5f);
-            material.SetFloat("_FadeStart", 32f);
-            material.SetFloat("_FadeEnd", 74f);
+            // Fades much further than before, because the field is no longer a
+            // patch in front of the lens: grass now has to survive out to the
+            // horizon to read as a landscape rather than a lawn.
+            material.SetFloat("_FadeStart", 90f);
+            material.SetFloat("_FadeEnd", 330f);
             material.enableInstancing = true;
             return material;
         }
@@ -243,13 +260,10 @@ namespace Vrar.EditorTools
             Material rock = BuildPropMaterial("BoulderRock", new Color(0.42f, 0.41f, 0.39f), 0.08f);
             LandscapeProps.Build(foliage, bark, rock, Vector3.zero, viewpoint);
 
-            // Grass is a component rather than baked geometry: it follows the
-            // viewer, so the field is seeded here at the opening viewpoint and
-            // rebuilt around the camera whenever it travels far enough.
-            var grass = new GameObject("GrassField");
-            grass.transform.SetParent(holder.transform, false);
-            var field = grass.AddComponent<GrassField>();
-            field.Configure(BuildGrassMaterial(), Vector3.zero, 9000, 95f);
+            // Baked across the whole map rather than in a disc around the camera,
+            // so the landscape is grassy everywhere the terrain will take it.
+            GrassField.Build(BuildGrassMaterial(), GrassTufts, GrassReach, GrassFalloff,
+                Vector3.zero, viewpoint);
 
             Livestock.Build(Vector3.zero, viewpoint);
         }
