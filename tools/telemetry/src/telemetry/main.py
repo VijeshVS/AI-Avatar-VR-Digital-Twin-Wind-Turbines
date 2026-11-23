@@ -24,7 +24,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from . import copilot
 from . import health as health_mod
+from . import prognosis as prognosis_mod
 from . import simulation
 from .models import SCHEMA_VERSION, ComponentHealth, TelemetryFrame
 
@@ -43,6 +45,18 @@ SMOOTHING_ALPHA = 0.3
 class ScenarioSelection(BaseModel):
     scenario: str = Field(default="", description="Optional scenario id, mirrors the path id")
     reset_clock: bool = Field(default=True, description="Restart elapsed time at zero")
+
+
+class AssistantRequest(BaseModel):
+    question: str = Field(
+        default="What is wrong with the turbine?", description="Operator question in plain language"
+    )
+    t: float | None = Field(
+        default=None, description="Scenario time in seconds; defaults to the latest requested tick"
+    )
+    scenario: str | None = Field(
+        default=None, description="Optional scenario id; defaults to the active one"
+    )
 
 
 @dataclass
@@ -204,9 +218,46 @@ def select_scenario(scenario_id: str, selection: ScenarioSelection | None = None
     }
 
 
+@app.get("/api/prognosis")
+def prognosis(t: float = 0.0, scenario: str | None = None) -> dict[str, object]:
+    """Deterministic trend and remaining-life band per component, no model involved."""
+    frame = frame_at(t, scenario)
+    return prognosis_mod.estimate(
+        frame.elapsed_s, frame.scenario, {c.id: c.health for c in frame.components}
+    ).to_dict()
+
+
+@app.post("/api/assistant")
+def assistant(request: AssistantRequest) -> dict[str, object]:
+    """Grounded maintenance copilot: one answer plus whitelisted client actions."""
+    elapsed = request.t
+    if elapsed is None:
+        elapsed = state.last_elapsed_s if state.last_elapsed_s >= 0 else 0.0
+
+    frame = frame_at(elapsed, request.scenario)
+    estimate = prognosis_mod.estimate(
+        frame.elapsed_s, frame.scenario, {c.id: c.health for c in frame.components}
+    )
+    reply = copilot.ask(request.question, frame, estimate)
+    worst = min(frame.components, key=lambda c: c.health, default=None)
+
+    return {
+        "answer": reply.answer,
+        "source": reply.source,
+        "actions": list(reply.actions),
+        "detail": reply.detail,
+        "t": round(frame.elapsed_s, 1),
+        "scenario": frame.scenario,
+        "worst": None
+        if worst is None
+        else {
+            "id": worst.id,
+            "label": worst.label,
+            "health": round(worst.health, 4),
+            "state": worst.state,
+        },
+    }
+
+
 def recommendation(worst) -> str:
-    if worst is None or worst.state == health_mod.STATE_HEALTHY:
-        return "continue routine monitoring"
-    if worst.state == health_mod.STATE_WARNING:
-        return f"schedule inspection of {worst.label.lower()} within 14 days"
-    return f"plan corrective maintenance on {worst.label.lower()} at the next convenient window"
+    return health_mod.maintenance_recommendation(worst)
