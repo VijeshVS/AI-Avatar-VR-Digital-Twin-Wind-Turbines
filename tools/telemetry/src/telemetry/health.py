@@ -162,6 +162,15 @@ def plant_health(components: tuple[ComponentHealth, ...]) -> float:
     return min(c.health for c in components)
 
 
+def maintenance_recommendation(component: ComponentHealth | None) -> str:
+    """One-line next action for a component, shared by the API and the copilot."""
+    if component is None or component.state == STATE_HEALTHY:
+        return "continue routine monitoring"
+    if component.state == STATE_WARNING:
+        return f"schedule inspection of {component.label.lower()} within 14 days"
+    return f"plan corrective maintenance on {component.label.lower()} at the next convenient window"
+
+
 def dominant_reason(component: ComponentHealth) -> str:
     if not component.factors:
         return "no measurable deviation"
