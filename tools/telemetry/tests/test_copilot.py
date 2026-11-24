@@ -152,3 +152,136 @@ def test_prognosis_endpoint_shape() -> None:
     assert payload["worst"] in {"gearbox", "main_bearing"}
     assert len(payload["components"]) == 5
     assert {"band", "days_to_critical", "confidence"} <= set(payload["components"][0])
+
+
+def test_fallback_does_not_repeat_the_deadline() -> None:
+    frame = frame_at(50.0, "gearbox_degradation")
+    estimate = prognosis.estimate(50.0, "gearbox_degradation")
+
+    reply = copilot.ask("What should I do?", frame, estimate)
+
+    assert "within 14 days" not in reply.answer
+    assert "schedule an inspection" in reply.answer.lower()
+
+
+# -- procedure mode ---------------------------------------------------------
+
+
+def test_procedure_fallback_returns_the_authored_plan() -> None:
+    frame = frame_at(150.0, "gearbox_degradation")
+    estimate = prognosis.estimate(150.0, "gearbox_degradation")
+
+    reply = copilot.fallback_procedure(frame, estimate)
+    payload = reply.to_dict()
+
+    assert reply.source == "rules"
+    assert payload["mode"] == "procedure"
+    assert payload["procedure"]["component_id"] == "gearbox"
+    assert [s["n"] for s in payload["procedure"]["steps"]] == list(range(1, 7))
+    assert payload["procedure"]["steps"][0]["id"] == "loto"
+    assert payload["disclaimer"]
+    assert "Gearbox" in payload["answer"] or "Main Bearing" in payload["answer"]
+
+
+def test_validate_step_ids_drops_unknown_and_deduplicates() -> None:
+    procedure = copilot.procedures.for_component("gearbox")
+
+    selected = copilot.validate_step_ids(
+        ["loto", "invented", "replace_bearing", "loto"], procedure
+    )
+
+    assert selected == ("loto", "replace_bearing")
+
+
+def test_validate_step_ids_forces_the_authored_procedure_without_safety() -> None:
+    procedure = copilot.procedures.for_component("gearbox")
+
+    selected = copilot.validate_step_ids(["oil_sample", "replace_bearing"], procedure)
+
+    assert selected == procedure.step_ids(), "a missing safety step must void the subset"
+
+
+def test_validate_step_ids_uses_everything_when_empty() -> None:
+    procedure = copilot.procedures.for_component("generator")
+
+    assert copilot.validate_step_ids(None, procedure) == procedure.step_ids()
+    assert copilot.validate_step_ids([], procedure) == procedure.step_ids()
+
+
+def test_procedure_model_path_keeps_authored_order(monkeypatch) -> None:
+    monkeypatch.setenv("VRAR_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(
+        copilot,
+        "_call_model",
+        lambda *a, **k: json.dumps(
+            {
+                "answer": "Gearbox is critical; replace the bearing.",
+                "step_ids": ["replace_bearing", "loto", "invented_step"],
+                "why": {
+                    "replace_bearing": "vibration and temperature both point at the bearing",
+                    "loto": "zero energy before opening the nacelle",
+                    "invented_step": "should be ignored",
+                },
+            }
+        ),
+    )
+
+    frame = frame_at(150.0, "gearbox_degradation")
+    estimate = prognosis.estimate(150.0, "gearbox_degradation")
+
+    payload = copilot.ask_procedure("How do I fix it?", frame, estimate).to_dict()
+    steps = payload["procedure"]["steps"]
+
+    assert payload["source"] == "llm"
+    assert [s["id"] for s in steps] == ["loto", "replace_bearing"]
+    assert steps[0]["why"] == "zero energy before opening the nacelle"
+    assert steps[1]["why"] == "vibration and temperature both point at the bearing"
+
+
+def test_procedure_model_cannot_skip_isolation(monkeypatch) -> None:
+    monkeypatch.setenv("VRAR_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(
+        copilot,
+        "_call_model",
+        lambda *a, **k: json.dumps(
+            {"answer": "Just swap it.", "step_ids": ["replace_bearing"], "why": {}}
+        ),
+    )
+
+    frame = frame_at(150.0, "gearbox_degradation")
+    estimate = prognosis.estimate(150.0, "gearbox_degradation")
+
+    payload = copilot.ask_procedure("How do I fix it?", frame, estimate).to_dict()
+    ids = [s["id"] for s in payload["procedure"]["steps"]]
+
+    assert ids == list(copilot.procedures.for_component("gearbox").step_ids())
+
+
+def test_procedure_endpoint_shape() -> None:
+    response = client.post(
+        "/api/assistant",
+        json={
+            "question": "How do I fix it?",
+            "mode": "procedure",
+            "t": 150.0,
+            "scenario": "gearbox_degradation",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["mode"] == "procedure"
+    assert payload["source"] == "rules"
+    assert payload["diagnosis"]["component_id"] in {"gearbox", "main_bearing"}
+    assert payload["procedure"]["title"]
+    assert payload["procedure"]["steps"]
+    assert payload["procedure"]["steps"][0]["n"] == 1
+    assert payload["disclaimer"]
+    assert payload["t"] == 150.0
+
+
+def test_unknown_mode_is_422() -> None:
+    response = client.post("/api/assistant", json={"mode": "poetry"})
+
+    assert response.status_code == 422

@@ -16,18 +16,36 @@ namespace Vrar.Telemetry
     {
         private readonly string _endpoint;
         private readonly int _timeoutSeconds;
+        private readonly bool _followServerClock;
 
-        public HttpTelemetrySource(string endpoint, int timeoutSeconds = 3)
+        public HttpTelemetrySource(
+            string endpoint,
+            int timeoutSeconds = 3,
+            bool followServerClock = false)
         {
-            _endpoint = endpoint;
+            _endpoint = (endpoint ?? string.Empty).TrimEnd('/');
             _timeoutSeconds = timeoutSeconds;
+            _followServerClock = followServerClock;
         }
 
         public string Endpoint => _endpoint;
+        public bool FollowServerClock => _followServerClock;
+
+        /// <summary>
+        /// URL for one frame. In follow mode the session clock decides the moment,
+        /// so <c>t</c> is omitted; otherwise the caller's token is the timestamp.
+        /// </summary>
+        public static string TelemetryUrl(string endpoint, int requestToken, bool followServerClock)
+        {
+            string root = (endpoint ?? string.Empty).TrimEnd('/');
+            return followServerClock
+                ? $"{root}/api/telemetry"
+                : $"{root}/api/telemetry?t={requestToken / 1f:0.0}";
+        }
 
         public IEnumerator Fetch(int requestToken, Action<TelemetryFrame, string> onComplete)
         {
-            string url = $"{_endpoint}/api/telemetry?t={requestToken / 1f:0.0}";
+            string url = TelemetryUrl(_endpoint, requestToken, _followServerClock);
             using UnityWebRequest request = UnityWebRequest.Get(url);
             request.timeout = _timeoutSeconds;
             yield return request.SendWebRequest();
