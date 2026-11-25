@@ -17,24 +17,30 @@ order, i.e. when the client is actually streaming.
 
 from __future__ import annotations
 
-import time
-from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import copilot
 from . import health as health_mod
 from . import prognosis as prognosis_mod
 from . import simulation
-from .models import SCHEMA_VERSION, ComponentHealth, TelemetryFrame
+from .models import COMPONENT_IDS, SCHEMA_VERSION, ComponentHealth, TelemetryFrame
+from .session import SessionState
 
 app = FastAPI(
     title="Wind Turbine Digital Twin Telemetry",
     version="0.1.0",
     description="Synthetic telemetry and explainable health scoring for the VR digital-twin PoC.",
 )
+
+STATIC_DIR = Path(__file__).parent / "static"
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 SAMPLE_RATE_HZ = 1.0
 # Exponential smoothing on the reported health. Real condition monitoring filters
@@ -47,9 +53,27 @@ class ScenarioSelection(BaseModel):
     reset_clock: bool = Field(default=True, description="Restart elapsed time at zero")
 
 
+class SessionCommand(BaseModel):
+    """One control command for the shared clock. Every field is optional."""
+
+    scenario: str | None = None
+    t: float | None = Field(default=None, ge=0, le=3600)
+    playing: bool | None = None
+    speed: float | None = Field(default=None, ge=0.1, le=100)
+    focus: str | None = Field(
+        default=None, description="Component id to focus; empty string clears it"
+    )
+    reset_t: bool = Field(
+        default=True, description="Restart the ramp when the scenario changes"
+    )
+
+
 class AssistantRequest(BaseModel):
     question: str = Field(
         default="What is wrong with the turbine?", description="Operator question in plain language"
+    )
+    mode: Literal["summary", "procedure"] = Field(
+        default="summary", description="summary answers; procedure returns a repair plan"
     )
     t: float | None = Field(
         default=None, description="Scenario time in seconds; defaults to the latest requested tick"
@@ -57,22 +81,6 @@ class AssistantRequest(BaseModel):
     scenario: str | None = Field(
         default=None, description="Optional scenario id; defaults to the active one"
     )
-
-
-@dataclass
-class SessionState:
-    """Latest health per component, used only to derive a streaming trend."""
-
-    scenario: str = field(default_factory=simulation.default_scenario)
-    last_elapsed_s: float = -1.0
-    previous_health: dict[str, float] = field(default_factory=dict)
-    smoothed_health: dict[str, float] = field(default_factory=dict)
-
-    def select(self, scenario: str) -> None:
-        self.scenario = scenario
-        self.last_elapsed_s = -1.0
-        self.previous_health.clear()
-        self.smoothed_health.clear()
 
 
 state = SessionState()
@@ -136,6 +144,12 @@ def healthz() -> dict[str, str]:
     return {"status": "ok", "scenario": state.scenario}
 
 
+@app.get("/", include_in_schema=False)
+def index() -> FileResponse:
+    """Operator console: the same service, seen from a browser."""
+    return FileResponse(STATIC_DIR / "index.html")
+
+
 @app.get("/api/scenarios")
 def scenarios() -> dict[str, list[dict[str, object]]]:
     return {
@@ -155,8 +169,12 @@ def scenarios() -> dict[str, list[dict[str, object]]]:
 
 @app.get("/api/telemetry")
 def telemetry(t: float | None = None, scenario: str | None = None) -> JSONResponse:
-    """One full frame. ``t`` defaults to a wall-clock-derived time for curl use."""
-    elapsed = t if t is not None else round(time.monotonic() % 3600.0, 3)
+    """One full frame. Without ``t`` the shared session clock is used.
+
+    ``?t=`` stays an explicit override: the PlayMode suite and the offline replay
+    ask for a specific moment and must keep receiving exactly that frame.
+    """
+    elapsed = t if t is not None else state.current_elapsed()
     return JSONResponse(frame_at(elapsed, scenario).to_dict())
 
 
@@ -208,20 +226,78 @@ def select_scenario(scenario_id: str, selection: ScenarioSelection | None = None
         scenario_id = selection.scenario
     if scenario_id not in simulation.SCENARIOS:
         raise HTTPException(status_code=404, detail=f"unknown scenario '{scenario_id}'")
-    state.select(scenario_id)
-    frame = frame_at(0.0, scenario_id)
+    reset_clock = selection.reset_clock if selection is not None else True
+    state.select(scenario_id, reset_t=reset_clock)
+    frame = frame_at(state.current_elapsed(), scenario_id)
     return {
         "scenario": frame.scenario,
         "healthy_asset": frame.healthy_asset,
         "plant_health": round(health_mod.plant_health(frame.components), 4),
         "components": [c.id for c in frame.components],
+        "t": round(frame.elapsed_s, 1),
+    }
+
+
+@app.get("/api/session")
+def get_session() -> dict[str, object]:
+    """The shared scenario, clock and focus command every client should follow."""
+    return state.snapshot()
+
+
+@app.post("/api/session")
+def set_session(command: SessionCommand) -> dict[str, object]:
+    """Drive the shared clock. Omitted fields are left untouched."""
+    if command.scenario is not None:
+        if command.scenario not in simulation.SCENARIOS:
+            raise HTTPException(
+                status_code=404, detail=f"unknown scenario '{command.scenario}'"
+            )
+        state.select(command.scenario, reset_t=command.reset_t)
+
+    if command.t is not None:
+        state.seek(command.t)
+    if command.playing is not None:
+        state.play(command.playing)
+    if command.speed is not None:
+        state.set_speed(command.speed)
+    if command.focus is not None:
+        if command.focus and command.focus not in COMPONENT_IDS:
+            raise HTTPException(
+                status_code=404, detail=f"unknown component '{command.focus}'"
+            )
+        state.set_focus(command.focus)
+
+    return state.snapshot()
+
+
+@app.get("/api/state")
+def state_snapshot() -> dict[str, object]:
+    """Everything a console needs in one coherent snapshot.
+
+    The frame and the prognosis are computed at the same instant as the session
+    time, so the page can never show health from one moment next to a clock from
+    another.
+    """
+    elapsed = state.current_elapsed()
+    frame = frame_at(elapsed, state.scenario)
+    estimate = prognosis_mod.estimate(
+        frame.elapsed_s, frame.scenario, {c.id: c.health for c in frame.components}
+    )
+
+    session = state.snapshot()
+    session["t"] = round(frame.elapsed_s, 2)
+    return {
+        "session": session,
+        "frame": frame.to_dict(),
+        "prognosis": estimate.to_dict(),
     }
 
 
 @app.get("/api/prognosis")
-def prognosis(t: float = 0.0, scenario: str | None = None) -> dict[str, object]:
+def prognosis(t: float | None = None, scenario: str | None = None) -> dict[str, object]:
     """Deterministic trend and remaining-life band per component, no model involved."""
-    frame = frame_at(t, scenario)
+    elapsed = t if t is not None else state.current_elapsed()
+    frame = frame_at(elapsed, scenario)
     return prognosis_mod.estimate(
         frame.elapsed_s, frame.scenario, {c.id: c.health for c in frame.components}
     ).to_dict()
@@ -232,31 +308,34 @@ def assistant(request: AssistantRequest) -> dict[str, object]:
     """Grounded maintenance copilot: one answer plus whitelisted client actions."""
     elapsed = request.t
     if elapsed is None:
-        elapsed = state.last_elapsed_s if state.last_elapsed_s >= 0 else 0.0
+        elapsed = state.current_elapsed()
 
     frame = frame_at(elapsed, request.scenario)
     estimate = prognosis_mod.estimate(
         frame.elapsed_s, frame.scenario, {c.id: c.health for c in frame.components}
     )
-    reply = copilot.ask(request.question, frame, estimate)
-    worst = min(frame.components, key=lambda c: c.health, default=None)
 
-    return {
-        "answer": reply.answer,
-        "source": reply.source,
-        "actions": list(reply.actions),
-        "detail": reply.detail,
-        "t": round(frame.elapsed_s, 1),
-        "scenario": frame.scenario,
-        "worst": None
-        if worst is None
-        else {
-            "id": worst.id,
-            "label": worst.label,
-            "health": round(worst.health, 4),
-            "state": worst.state,
-        },
-    }
+    if request.mode == "procedure":
+        payload = copilot.ask_procedure(request.question, frame, estimate).to_dict()
+    else:
+        payload = copilot.ask(request.question, frame, estimate).to_dict()
+
+    worst = min(frame.components, key=lambda c: c.health, default=None)
+    payload.update(
+        {
+            "t": round(frame.elapsed_s, 1),
+            "scenario": frame.scenario,
+            "worst": None
+            if worst is None
+            else {
+                "id": worst.id,
+                "label": worst.label,
+                "health": round(worst.health, 4),
+                "state": worst.state,
+            },
+        }
+    )
+    return payload
 
 
 def recommendation(worst) -> str:

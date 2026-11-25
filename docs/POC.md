@@ -62,6 +62,9 @@ stands in for the XR Device Simulator: no headset, no XR runtime, same camera
 rig the XR path will use. The Editor menu **VRAR → PoC → Frame Camera On
 Turbine** re-frames the view if you get lost.
 
+To let the [web console](WEB.md) drive the scenario, clock and camera focus,
+launch the Editor with `-vrar-follow` (or `VRAR_FOLLOW=1`).
+
 ### Without the service
 
 ```bash
@@ -145,7 +148,7 @@ red at once, the scoring has stopped being discriminative, and
 ## Verification
 
 ```bash
-# service: 31 tests over the simulation, the scoring rules and the HTTP contract
+# service: 110 tests over the simulation, scoring, HTTP, session, copilot and web
 cd tools/telemetry && uv run pytest
 
 # Unity: contract, avatar expression and wiring tests

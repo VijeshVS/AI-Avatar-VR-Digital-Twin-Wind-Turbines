@@ -22,6 +22,7 @@ from typing import Any
 import httpx
 
 from . import health as health_mod
+from . import procedures
 from . import prognosis as prognosis_mod
 from . import simulation
 from .models import COMPONENT_IDS, TelemetryFrame
@@ -195,6 +196,9 @@ def _fallback_answer(frame: TelemetryFrame, estimate: prognosis_mod.PlantPrognos
         recommendation = (
             f"plan corrective maintenance on {worst.label.lower()} at the next convenient window"
         )
+    elif trend is not None and trend.band == prognosis_mod.BAND_8_TO_30D:
+        # The outlook already states the deadline; do not repeat it as a second one.
+        recommendation = f"schedule an inspection of {worst.label.lower()}"
 
     if worst.state == health_mod.STATE_HEALTHY:
         return (
@@ -302,13 +306,15 @@ def _parse_reply(content: str) -> tuple[str, tuple[dict[str, Any], ...]]:
     return answer.strip()[:MAX_ANSWER_CHARS], validate_actions(payload.get("actions"))
 
 
-def _call_model(question: str, context: dict[str, Any], config: LlmConfig) -> str:
+def _call_model(
+    question: str, context: dict[str, Any], config: LlmConfig, system: str = SYSTEM_PROMPT
+) -> str:
     payload = {
         "model": config.model,
         "temperature": 0.2,
         "max_tokens": 400,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system},
             {
                 "role": "user",
                 "content": "CONTEXT:\n"
@@ -347,3 +353,223 @@ def ask(question: str, frame: TelemetryFrame, estimate: prognosis_mod.PlantProgn
     if not actions:
         actions = _fallback_actions(frame)
     return AssistantReply(answer=answer, source="llm", actions=actions)
+
+
+# -- procedure mode ----------------------------------------------------------
+
+PROCEDURE_SYSTEM_PROMPT = """You are the maintenance copilot for a wind-turbine digital twin.
+
+You are given DIAGNOSIS (computed by the health engine) and an AUTHORED PROCEDURE
+whose steps have stable ids.
+
+Rules:
+- Select only step ids that appear in PROCEDURE.steps. Never invent a step.
+- Include every step whose "safety" field is true.
+- Do not reorder the steps; the server keeps the authored order.
+- Never invent tools, torque values, part numbers or durations.
+- Give one short sentence of WHY per selected step, tied to the diagnosis.
+- answer: at most three sentences naming the component, its health and its dominant factor.
+- Reply with JSON only:
+  {"answer": "text", "step_ids": ["..."], "why": {"step_id": "one sentence"}}
+"""
+
+
+@dataclass(frozen=True)
+class ProcedureReply:
+    """A grounded repair plan: authored steps, model-selected subset, model phrasing."""
+
+    answer: str
+    source: str
+    diagnosis: dict[str, Any]
+    procedure: procedures.Procedure
+    step_ids: tuple[str, ...]
+    why: dict[str, str]
+    actions: tuple[dict[str, Any], ...]
+    detail: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        steps = []
+        for step in self.procedure.steps:
+            if step.id not in self.step_ids:
+                continue
+            steps.append(
+                {
+                    "n": len(steps) + 1,
+                    "id": step.id,
+                    "action": step.action,
+                    "detail": step.detail,
+                    "tool": step.tool,
+                    "safety": step.safety,
+                    "why": self.why.get(step.id, step.detail),
+                }
+            )
+
+        return {
+            "answer": self.answer,
+            "source": self.source,
+            "mode": "procedure",
+            "diagnosis": self.diagnosis,
+            "procedure": {
+                "component_id": self.procedure.component_id,
+                "title": self.procedure.title,
+                "tools": list(self.procedure.tools),
+                "safety": list(self.procedure.safety),
+                "steps": steps,
+            },
+            "actions": list(self.actions),
+            "detail": self.detail,
+            "disclaimer": procedures.DISCLAIMER,
+        }
+
+
+def build_diagnosis(
+    frame: TelemetryFrame, estimate: prognosis_mod.PlantPrognosis
+) -> dict[str, Any]:
+    """The worst component, in the shape both the page and the prompt consume."""
+    worst = min(frame.components, key=lambda c: c.health, default=None)
+    if worst is None:
+        return {}
+
+    trend = next((c for c in estimate.components if c.component_id == worst.id), None)
+    return {
+        "component_id": worst.id,
+        "label": worst.label,
+        "health": round(worst.health, 3),
+        "health_pct": round(worst.health * 100.0),
+        "state": worst.state,
+        "reason": health_mod.dominant_reason(worst),
+        "top_factor": _top_factor(worst),
+        "band": trend.band if trend else prognosis_mod.BAND_UNKNOWN,
+        "days_to_critical": None
+        if trend is None or trend.days_to_critical is None
+        else round(trend.days_to_critical, 1),
+        "confidence": round(trend.confidence, 2) if trend else 0.0,
+    }
+
+
+def build_procedure_context(
+    diagnosis: dict[str, Any], procedure: procedures.Procedure
+) -> dict[str, Any]:
+    return {
+        "diagnosis": diagnosis,
+        "procedure": {
+            "title": procedure.title,
+            "tools": list(procedure.tools),
+            "safety": list(procedure.safety),
+            "steps": [
+                {"id": step.id, "action": step.action, "safety": step.safety, "tool": step.tool}
+                for step in procedure.steps
+            ],
+        },
+    }
+
+
+def validate_step_ids(raw: Any, procedure: procedures.Procedure) -> tuple[str, ...]:
+    """Keep a model-selected subset only if it is real and safe.
+
+    Unknown ids are dropped. If the selection is empty, or omits any authored
+    safety step, the whole authored procedure is used instead — a model must not
+    be able to talk itself out of lock-out/tag-out.
+    """
+    known = procedure.step_ids()
+    selected: list[str] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, str) and item in known and item not in selected:
+                selected.append(item)
+
+    if not selected:
+        return known
+    if any(step_id not in selected for step_id in procedure.safety_ids()):
+        return known
+    return tuple(selected)
+
+
+def _parse_procedure_reply(
+    content: str, procedure: procedures.Procedure
+) -> tuple[str, tuple[str, ...], dict[str, str]]:
+    payload = json.loads(_strip_code_fence(content))
+    if not isinstance(payload, dict):
+        raise ValueError("model reply was not a JSON object")
+
+    answer = payload.get("answer")
+    if not isinstance(answer, str) or not answer.strip():
+        raise ValueError("model reply had no answer text")
+
+    step_ids = validate_step_ids(payload.get("step_ids"), procedure)
+
+    why: dict[str, str] = {}
+    raw_why = payload.get("why")
+    if isinstance(raw_why, dict):
+        for step_id in step_ids:
+            text = raw_why.get(step_id)
+            if isinstance(text, str) and text.strip():
+                why[step_id] = text.strip()[:240]
+
+    return answer.strip()[:MAX_ANSWER_CHARS], step_ids, why
+
+
+def fallback_procedure(
+    frame: TelemetryFrame,
+    estimate: prognosis_mod.PlantPrognosis,
+    detail: str = "",
+) -> ProcedureReply:
+    """The authored procedure verbatim, used when no model is configured."""
+    diagnosis = build_diagnosis(frame, estimate)
+    procedure = procedures.for_component(str(diagnosis.get("component_id", "gearbox")))
+    worst = min(frame.components, key=lambda c: c.health, default=None)
+    actions = (
+        ({"type": ACTION_FOCUS, "component_id": worst.id},) if worst is not None else ()
+    )
+    return ProcedureReply(
+        answer=_fallback_answer(frame, estimate),
+        source="rules",
+        diagnosis=diagnosis,
+        procedure=procedure,
+        step_ids=procedure.step_ids(),
+        why={},
+        actions=actions,
+        detail=detail,
+    )
+
+
+def ask_procedure(
+    question: str,
+    frame: TelemetryFrame,
+    estimate: prognosis_mod.PlantPrognosis,
+) -> ProcedureReply:
+    """Build a repair plan whose steps come from the library, not the model."""
+    config = config_from_env()
+    if not config.api_key:
+        return fallback_procedure(frame, estimate, detail="no API key configured")
+
+    diagnosis = build_diagnosis(frame, estimate)
+    procedure = procedures.for_component(str(diagnosis.get("component_id", "gearbox")))
+    context = build_procedure_context(diagnosis, procedure)
+
+    try:
+        content = _call_model(
+            question or "How do I fix it?",
+            context,
+            config,
+            system=PROCEDURE_SYSTEM_PROMPT,
+        )
+        answer, step_ids, why = _parse_procedure_reply(content, procedure)
+    except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as error:
+        return fallback_procedure(
+            frame, estimate, detail=f"{type(error).__name__}: {error}"
+        )
+
+    worst = min(frame.components, key=lambda c: c.health, default=None)
+    actions = (
+        ({"type": ACTION_FOCUS, "component_id": worst.id},) if worst is not None else ()
+    )
+    return ProcedureReply(
+        answer=answer,
+        source="llm",
+        diagnosis=diagnosis,
+        procedure=procedure,
+        step_ids=step_ids,
+        why=why,
+        actions=actions,
+    )

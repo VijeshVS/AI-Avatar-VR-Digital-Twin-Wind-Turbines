@@ -22,5 +22,8 @@ Headline limitations, stated up front:
 ## Documentation
 
 - [`docs/POC.md`](docs/POC.md) — **runnable proof of concept**: synthetic telemetry → explainable health → avatars that change colour, emission, tremor and sound
+- [`docs/AI.md`](docs/AI.md) — **AI copilot**: grounded LLM narration, deterministic prognosis, validated actions, and what is (and is not) learned
+- [`docs/API.md`](docs/API.md) — **service API**: the shared clock, session control, snapshots and copilot endpoints
+- [`docs/WEB.md`](docs/WEB.md) — **operator console**: the browser view, its controls and why it holds no state
 - [`docs/PRD.md`](docs/PRD.md) — Product Requirements Document (problem statement, users, user stories, functional and non-functional requirements, assumptions, limitations)
 - [`topic.md`](topic.md) — original project brief

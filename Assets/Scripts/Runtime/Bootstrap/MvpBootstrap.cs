@@ -1,6 +1,9 @@
+using System;
 using System.Collections;
 using System.IO;
+using System.Text;
 using UnityEngine;
+using Vrar.AI;
 using Vrar.Avatar;
 using Vrar.Presentation;
 using Vrar.Telemetry;
@@ -22,6 +25,8 @@ namespace Vrar.Bootstrap
         private const string SampleArgument = "-vrar-sample";
         private const string EndpointArgument = "-vrar-endpoint";
         private const string TimeArgument = "-vrar-time";
+        private const string FollowArgument = "-vrar-follow";
+        private const string FollowEnvironment = "VRAR_FOLLOW";
         private const string DefaultEndpoint = "http://127.0.0.1:8000";
         private const string SamplePath = "telemetry_sample.json";
 
@@ -39,17 +44,22 @@ namespace Vrar.Bootstrap
         private int _requestToken;
         private bool _connected;
         private bool _playing = true;
+        private bool _followServerClock;
+        private readonly SessionFocusFollower _focusFollower = new SessionFocusFollower();
         private string _endpoint = DefaultEndpoint;
         private string _statusOverride = string.Empty;
 
         public TurbineRig Rig => _rig;
         public bool Connected => _connected;
         public string Endpoint => _endpoint;
+        public bool FollowingServerClock => _followServerClock;
         public TelemetryFrame LastFrame => _rig?.LastFrame;
+        public ComponentFocus Focus => _hud?.Focus;
 
         private void Awake()
         {
             _endpoint = ResolveEndpoint();
+            _followServerClock = ResolveFollowServerClock();
             _rig = FindFirstObjectByType<TurbineRig>();
             if (_rig == null && _buildRigIfMissing)
             {
@@ -65,6 +75,9 @@ namespace Vrar.Bootstrap
 
             _focusIsolation = gameObject.AddComponent<ComponentFocusIsolation>();
             _focusIsolation.Bind(_rig, _hud.Focus);
+
+            CopilotPanel copilot = gameObject.AddComponent<CopilotPanel>();
+            copilot.Bind(this);
 
             _source = CreateSource();
             if (_source is HttpTelemetrySource http)
@@ -92,7 +105,7 @@ namespace Vrar.Bootstrap
             {
                 // Scrub straight to a point in the scenario: handy for demoing a
                 // degraded machine without waiting out the fault ramp.
-                _requestToken = Mathf.Max(0, Mathf.RoundToInt(startTime.Value * 10f));
+                _requestToken = Mathf.Max(0, Mathf.RoundToInt(startTime.Value));
             }
 
             if (HasArgument(SampleArgument))
@@ -106,7 +119,7 @@ namespace Vrar.Bootstrap
                 Debug.LogWarning("[VRAR] -vrar-sample given but no sample frames were found; falling back to HTTP.");
             }
 
-            return new HttpTelemetrySource(_endpoint);
+            return new HttpTelemetrySource(_endpoint, followServerClock: _followServerClock);
         }
 
         private static float? ParseFloatArgument(string name)
@@ -165,6 +178,11 @@ namespace Vrar.Bootstrap
             }
 
             UpdateAudio();
+
+            if (_followServerClock)
+            {
+                yield return PollSession();
+            }
         }
 
         private void LateUpdate()
@@ -177,6 +195,11 @@ namespace Vrar.Bootstrap
             string status = _connected
                 ? $"{_endpoint}"
                 : (_statusOverride.Length > 0 ? _statusOverride : "no response");
+            if (_followServerClock)
+            {
+                status = $"{status}  ·  web control";
+            }
+
             _hud.SetFrame(_rig?.LastFrame, _connected, status);
         }
 
@@ -189,6 +212,50 @@ namespace Vrar.Bootstrap
 
             TelemetryFrame frame = _rig?.LastFrame;
             _audio.UpdateHum(frame?.environment?.rotor_rpm ?? 0f, frame?.Signal("pitch_angle_deg") ?? 0f, _connected);
+        }
+
+        /// <summary>
+        /// Read the shared session and apply a new focus command exactly once.
+        /// Polled only in follow mode, so the desktop path pays no extra request.
+        /// </summary>
+        private IEnumerator PollSession()
+        {
+            using UnityEngine.Networking.UnityWebRequest request =
+                UnityEngine.Networking.UnityWebRequest.Get($"{_endpoint}/api/session");
+            request.timeout = 3;
+            yield return request.SendWebRequest();
+
+            if (request.result != UnityEngine.Networking.UnityWebRequest.Result.Success)
+            {
+                yield break;
+            }
+
+            SessionPayload session;
+            try
+            {
+                session = JsonUtility.FromJson<SessionPayload>(request.downloadHandler.text);
+            }
+            catch (Exception)
+            {
+                yield break;
+            }
+
+            if (!_focusFollower.TryConsume(session, out string componentId, out bool clearFocus))
+            {
+                yield break;
+            }
+
+            if (clearFocus)
+            {
+                Focus?.Clear();
+                yield break;
+            }
+
+            int index = CopilotPanel.IndexOfComponent(_rig, componentId);
+            if (index >= 0)
+            {
+                Focus?.Select(index);
+            }
         }
 
         /// <summary>Switch scenario through the service and reset the playback clock.</summary>
@@ -215,20 +282,68 @@ namespace Vrar.Bootstrap
             yield return request.SendWebRequest();
         }
 
-        /// <summary>Scrub the playback clock, for scrubbing through a scenario by hand.</summary>
+        /// <summary>Scrub the playback clock, locally or on the shared session.</summary>
         public void SetPlaybackTime(float seconds)
         {
-            _requestToken = Mathf.Max(0, Mathf.RoundToInt(seconds * 10f));
+            if (_followServerClock)
+            {
+                StartCoroutine(PostSessionTime(seconds));
+                return;
+            }
+
+            _requestToken = Mathf.Max(0, Mathf.RoundToInt(seconds));
             _pollTimer = 0f;
         }
 
         public void SetPlaying(bool playing)
         {
             _playing = playing;
+            if (_followServerClock)
+            {
+                StartCoroutine(PostSessionPlaying(playing));
+            }
+
             if (!playing && _audio != null)
             {
                 _audio.StopAlarm();
             }
+        }
+
+        private IEnumerator PostSessionTime(float seconds)
+        {
+            yield return PostSession(
+                $"{{\"t\":{seconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}}}");
+        }
+
+        private IEnumerator PostSessionPlaying(bool playing)
+        {
+            yield return PostSession($"{{\"playing\":{(playing ? "true" : "false")}}}");
+        }
+
+        private IEnumerator PostSession(string json)
+        {
+            using UnityEngine.Networking.UnityWebRequest request =
+                new UnityEngine.Networking.UnityWebRequest($"{_endpoint}/api/session", "POST");
+            request.uploadHandler =
+                new UnityEngine.Networking.UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
+            request.downloadHandler = new UnityEngine.Networking.DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+            request.timeout = 3;
+            yield return request.SendWebRequest();
+        }
+
+        private static bool ResolveFollowServerClock()
+        {
+            // An explicit time or an offline replay owns the clock; never fight it.
+            if (HasArgument(SampleArgument) || HasArgument(TimeArgument))
+            {
+                return false;
+            }
+
+            string fromEnvironment = System.Environment.GetEnvironmentVariable(FollowEnvironment);
+            return HasArgument(FollowArgument)
+                || string.Equals(fromEnvironment, "1", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(fromEnvironment, "true", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string ResolveEndpoint()

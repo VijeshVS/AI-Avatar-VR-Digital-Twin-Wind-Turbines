@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wind Turbine Twin — Operator Console</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="dot" id="conn-dot"></span>
+      <h1>WIND TURBINE DIGITAL TWIN</h1>
+      <span class="tag">OPERATOR CONSOLE</span>
+    </div>
+    <div class="status" id="status">connecting…</div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>COMPONENTS</h2>
+        <span class="hint">click a card to point the twin at it</span>
+      </div>
+      <div id="cards" class="cards"></div>
+      <p class="plant" id="plant"></p>
+    </section>
+
+    <aside class="panel side">
+      <h2>FAULT PROGRAMME</h2>
+      <div id="scenarios" class="scenarios"></div>
+
+      <h2>CLOCK</h2>
+      <div class="row">
+        <button id="play" class="btn">Pause</button>
+        <label class="speed">
+          <span>speed</span>
+          <select id="speed">
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+            <option value="5">5×</option>
+            <option value="10">10×</option>
+          </select>
+        </label>
+      </div>
+      <div class="clock" id="clock">t = 0.0 s</div>
+      <input id="scrub" type="range" min="0" max="240" step="1" value="0" aria-label="Scenario time">
+      <div class="scrub-labels"><span>0 s</span><span>240 s</span></div>
+    </aside>
+
+    <section class="panel ai" id="ai">
+      <div class="panel-head">
+        <h2>AI COPILOT</h2>
+        <span class="hint">grounded on the live frame · no numbers invented</span>
+      </div>
+
+      <div class="presets" id="ai-presets">
+        <button data-question="What is wrong with the turbine?" data-mode="summary">What's wrong?</button>
+        <button data-question="Why is it failing?" data-mode="summary">Why is it failing?</button>
+        <button data-question="How do I fix it?" data-mode="procedure">How do I fix it?</button>
+      </div>
+
+      <div class="ask-row">
+        <input id="ai-question" type="text" placeholder="Ask about the machine…" autocomplete="off"
+               aria-label="Question for the copilot">
+        <select id="ai-mode" aria-label="Answer type">
+          <option value="summary">answer</option>
+          <option value="procedure">repair plan</option>
+        </select>
+        <button id="ai-ask" class="btn">Ask</button>
+      </div>
+
+      <div class="ai-output">
+        <p class="ai-empty" id="ai-empty">
+          Ask a question, or pick one above. The answer is grounded on the frame
+          the twin is showing right now.
+        </p>
+        <p class="ai-answer" id="ai-answer" aria-live="polite" hidden></p>
+        <div class="ai-meta" id="ai-meta" hidden></div>
+        <div class="diagnosis" id="ai-diagnosis" hidden></div>
+        <div class="tools" id="ai-tools" hidden></div>
+        <div class="steps" id="ai-steps" hidden></div>
+        <p class="disclaimer" id="ai-disclaimer" hidden></p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
