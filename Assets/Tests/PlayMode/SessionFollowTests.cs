@@ -26,6 +26,18 @@ namespace Vrar.Tests
         }
 
         [Test]
+        public void TurbineIdIsCarriedInTheQueryString()
+        {
+            string explicitUrl = HttpTelemetrySource.TelemetryUrl(
+                "http://host:8000", 120, false, "T7");
+            string followUrl = HttpTelemetrySource.TelemetryUrl(
+                "http://host:8000", 120, true, "T7");
+
+            Assert.That(explicitUrl, Is.EqualTo("http://host:8000/api/telemetry?t=120.0&turbine_id=T7"));
+            Assert.That(followUrl, Is.EqualTo("http://host:8000/api/telemetry?turbine_id=T7"));
+        }
+
+        [Test]
         public void FocusCommandIsAppliedOncePerSequence()
         {
             var follower = new SessionFocusFollower();

@@ -26,15 +26,18 @@ namespace Vrar.Bootstrap
         private const string EndpointArgument = "-vrar-endpoint";
         private const string TimeArgument = "-vrar-time";
         private const string FollowArgument = "-vrar-follow";
+        private const string TurbineArgument = "-vrar-turbine";
         private const string FollowEnvironment = "VRAR_FOLLOW";
+        private const string TurbineEnvironment = "VRAR_TURBINE_ID";
         private const string DefaultEndpoint = "http://127.0.0.1:8000";
+        private const string DefaultTurbineId = "T1";
         private const string SamplePath = "telemetry_sample.json";
 
         [SerializeField, Min(0.1f)] private float _pollIntervalSeconds = 1f;
         [SerializeField] private bool _buildRigIfMissing = true;
         [SerializeField] private bool _enableAudio = true;
+        [SerializeField] private TurbineRig _rig;
 
-        private TurbineRig _rig;
         private ITelemetrySource _source;
         private ProceduralAudio _audio;
         private HudOverlay _hud;
@@ -47,11 +50,13 @@ namespace Vrar.Bootstrap
         private bool _followServerClock;
         private readonly SessionFocusFollower _focusFollower = new SessionFocusFollower();
         private string _endpoint = DefaultEndpoint;
+        private string _turbineId = DefaultTurbineId;
         private string _statusOverride = string.Empty;
 
         public TurbineRig Rig => _rig;
         public bool Connected => _connected;
         public string Endpoint => _endpoint;
+        public string TurbineId => _turbineId;
         public bool FollowingServerClock => _followServerClock;
         public TelemetryFrame LastFrame => _rig?.LastFrame;
         public ComponentFocus Focus => _hud?.Focus;
@@ -59,8 +64,13 @@ namespace Vrar.Bootstrap
         private void Awake()
         {
             _endpoint = ResolveEndpoint();
+            _turbineId = ResolveTurbineId();
             _followServerClock = ResolveFollowServerClock();
-            _rig = FindFirstObjectByType<TurbineRig>();
+            if (_rig == null)
+            {
+                _rig = FindFirstObjectByType<TurbineRig>();
+            }
+
             if (_rig == null && _buildRigIfMissing)
             {
                 TurbineFactory.BuildGround();
@@ -119,7 +129,8 @@ namespace Vrar.Bootstrap
                 Debug.LogWarning("[VRAR] -vrar-sample given but no sample frames were found; falling back to HTTP.");
             }
 
-            return new HttpTelemetrySource(_endpoint, followServerClock: _followServerClock);
+            return new HttpTelemetrySource(
+                _endpoint, followServerClock: _followServerClock, turbineId: _turbineId);
         }
 
         private static float? ParseFloatArgument(string name)
@@ -344,6 +355,23 @@ namespace Vrar.Bootstrap
             return HasArgument(FollowArgument)
                 || string.Equals(fromEnvironment, "1", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(fromEnvironment, "true", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string ResolveTurbineId()
+        {
+            string[] arguments = System.Environment.GetCommandLineArgs();
+            for (int i = 0; i < arguments.Length - 1; i++)
+            {
+                if (arguments[i] == TurbineArgument && !string.IsNullOrWhiteSpace(arguments[i + 1]))
+                {
+                    return arguments[i + 1].Trim();
+                }
+            }
+
+            string fromEnvironment = System.Environment.GetEnvironmentVariable(TurbineEnvironment);
+            return string.IsNullOrWhiteSpace(fromEnvironment)
+                ? DefaultTurbineId
+                : fromEnvironment.Trim();
         }
 
         private static string ResolveEndpoint()

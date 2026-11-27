@@ -27,6 +27,43 @@ MIN_SPEED = 0.1
 MAX_SPEED = 100.0
 MAX_ELAPSED_S = 3600.0
 
+ASSET_HOURS_PER_SIM_SECOND = simulation.ASSET_HOURS_PER_SIM_SECOND
+SIM_SECONDS_PER_ASSET_HOUR = simulation.SIM_SECONDS_PER_ASSET_HOUR
+
+
+# -- asset-time helpers ------------------------------------------------------
+#
+# The session clock is expressed in simulation seconds, but the engine samples
+# once per asset-hour. These helpers are the single conversion point, so the
+# browser, Unity and the predictor cannot disagree about which tick "now" is.
+
+
+def asset_hours(sim_seconds: float) -> float:
+    """Simulation seconds -> asset-hours (the engine's clock)."""
+    return simulation.asset_time_hours(sim_seconds)
+
+
+def sim_seconds(asset_hours: float) -> float:
+    """Asset-hours -> simulation seconds."""
+    return simulation.sim_seconds_for_asset_hours(asset_hours)
+
+
+def tick_index(sim_seconds: float) -> int:
+    """Nearest engine tick (one asset-hour) for a simulation time."""
+    return simulation.tick_index_at(sim_seconds)
+
+
+def sim_time_for_tick(tick: int) -> float:
+    """Simulation time of an engine tick."""
+    return simulation.sim_seconds_for_tick(tick)
+
+
+# Descriptive aliases, for callers that prefer the long form.
+asset_time_hours = asset_hours
+sim_seconds_for_asset_hours = sim_seconds
+tick_index_at = tick_index
+sim_seconds_for_tick = sim_time_for_tick
+
 
 class SessionState:
     """Scenario, clock and the smoothing state used to report health trends."""
@@ -42,10 +79,10 @@ class SessionState:
         self.focus: str | None = None
         self.focus_seq: int = 0
 
-        # Latest health per component, used only to derive a streaming trend.
+        # Latest health per (turbine, component), used only to derive a trend.
         self.last_elapsed_s: float = -1.0
-        self.previous_health: dict[str, float] = {}
-        self.smoothed_health: dict[str, float] = {}
+        self.previous_health: dict[tuple[str, str], float] = {}
+        self.smoothed_health: dict[tuple[str, str], float] = {}
 
     # -- clock -------------------------------------------------------------
 

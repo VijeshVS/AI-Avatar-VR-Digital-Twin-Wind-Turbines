@@ -19,7 +19,8 @@ namespace Vrar.Tests
         {
             "rotor_angle_deg", "pitch_angle_deg", "rotor_imbalance_index",
             "nacelle_vibration_mm_s", "gearbox_vibration_mm_s",
-            "generator_winding_temp_c", "pitch_position_error_deg"
+            "generator_winding_temp_c", "pitch_position_error_deg",
+            "main_bearing_temp", "main_bearing_vibration"
         };
 
         private TelemetryFrame[] _frames;
@@ -41,6 +42,8 @@ namespace Vrar.Tests
             foreach (TelemetryFrame frame in _frames)
             {
                 Assert.That(frame.schema_version, Is.EqualTo(1));
+                Assert.That(frame.turbine_id, Is.EqualTo("T1"));
+                Assert.That(frame.asset_time_h, Is.GreaterThanOrEqualTo(0f));
                 Assert.That(frame.scenario, Is.EqualTo("gearbox_degradation"));
                 Assert.That(frame.healthy_asset, Is.False);
             }

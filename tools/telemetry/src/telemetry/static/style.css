@@ -91,7 +91,7 @@ main {
   padding: 16px;
 }
 
-.panel.side { align-self: start; position: sticky; top: 74px; }
+.panel.side { align-self: start; }
 
 .panel-head {
   display: flex;
@@ -261,7 +261,6 @@ select {
 
 @media (max-width: 1000px) {
   main { grid-template-columns: minmax(0, 1fr); }
-  .panel.side { position: static; }
 }
 
 /* -- AI copilot ---------------------------------------------------------- */

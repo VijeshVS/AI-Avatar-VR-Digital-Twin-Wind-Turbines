@@ -29,6 +29,12 @@ namespace Vrar.Turbine
         public Transform Rotor => _rotor;
         public TelemetryFrame LastFrame { get; private set; }
 
+        /// <summary>Identity of the machine this rig is displaying.</summary>
+        public string TurbineId => LastFrame?.TurbineIdOr("T1") ?? "T1";
+
+        /// <summary>Machine time of the last frame, in asset-hours.</summary>
+        public float AssetTimeH => LastFrame?.asset_time_h ?? 0f;
+
         /// <summary>
         /// Rebuild the lookup tables from the hierarchy.
         ///

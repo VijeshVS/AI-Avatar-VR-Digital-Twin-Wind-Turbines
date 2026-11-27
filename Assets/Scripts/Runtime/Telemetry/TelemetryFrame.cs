@@ -12,13 +12,23 @@ namespace Vrar.Telemetry
     public class TelemetryFrame
     {
         public int schema_version;
+        /// <summary>Which turbine this frame belongs to. Defaults to "T1" on the service.</summary>
+        public string turbine_id;
         public int tick;
+        /// <summary>Machine time in asset-hours; one engine tick equals one asset-hour.</summary>
+        public float asset_time_h;
         public float elapsed_s;
         public string scenario;
         public bool healthy_asset;
         public EnvironmentPayload environment;
         public SignalPayload[] signals;
         public ComponentPayload[] components;
+
+        /// <summary>The turbine id, falling back to the service's default for older payloads.</summary>
+        public string TurbineIdOr(string fallback = "T1")
+        {
+            return string.IsNullOrEmpty(turbine_id) ? fallback : turbine_id;
+        }
 
         public float Signal(string id)
         {
