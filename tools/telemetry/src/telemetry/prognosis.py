@@ -14,11 +14,12 @@ explained rather than asserted.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from . import health as health_mod
 from . import simulation
-from .models import DEFAULT_TURBINE_ID
+from .models import DEFAULT_TURBINE_ID, Sample
 
 HOURS_PER_SIM_SECOND = simulation.ASSET_HOURS_PER_SIM_SECOND
 
@@ -93,14 +94,24 @@ class PlantPrognosis:
         }
 
 
-def _health_at(t: float, scenario: str, turbine_id: str) -> dict[str, float]:
+def _health_at(
+    t: float,
+    scenario: str,
+    turbine_id: str,
+    sample_at_t: Callable[[float, str, str], Sample] | None = None,
+) -> dict[str, float]:
     """Raw (unsmoothed) health at one instant, without touching service state.
 
     Only measured values are scored, on the same one-asset-hour grid the engine
-    uses, so a prognosis is reproducible after a seek.
+    uses, so a prognosis is reproducible after a seek. The prognosis module
+    never sees injections or true values directly.
     """
-    sample = simulation.sample_at_tick(
-        simulation.tick_index_at(t), scenario, turbine_id=turbine_id
+    sample = (
+        sample_at_t(t, scenario, turbine_id)
+        if sample_at_t is not None
+        else simulation.sample_at_tick(
+            simulation.tick_index_at(t), scenario, turbine_id=turbine_id
+        )
     )
     return {c.id: c.health for c in health_mod.score_sample(sample)}
 
@@ -169,6 +180,7 @@ def estimate(
     scenario: str,
     current: dict[str, float] | None = None,
     turbine_id: str = DEFAULT_TURBINE_ID,
+    sample_at_t: Callable[[float, str, str], Sample] | None = None,
 ) -> PlantPrognosis:
     """Measure every component's trend over the window ending at ``t``.
 
@@ -188,7 +200,9 @@ def estimate(
 
     histories: dict[str, list[tuple[float, float]]] = {}
     for tick in ticks:
-        for component_id, health in _health_at(tick, scenario, turbine_id).items():
+        for component_id, health in _health_at(
+            tick, scenario, turbine_id, sample_at_t=sample_at_t
+        ).items():
             histories.setdefault(component_id, []).append((tick, health))
 
     components: list[TrendEstimate] = []

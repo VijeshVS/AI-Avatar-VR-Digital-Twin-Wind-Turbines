@@ -49,6 +49,84 @@
       <div class="scrub-labels"><span>0 s</span><span>240 s</span></div>
     </aside>
 
+    <section class="panel lab" id="scenario-lab">
+      <div class="panel-head">
+        <div class="lab-title-row">
+          <h2>SCENARIO LAB</h2>
+          <span class="chip warn">Injected (hidden from predictor)</span>
+        </div>
+        <span class="hint">deterministic, seek-safe injections — predictor sees measured signals only</span>
+      </div>
+
+      <div class="lab-presets-wrap">
+        <span class="lab-label">Demo presets</span>
+        <div id="lab-presets" class="presets"></div>
+      </div>
+
+      <form id="lab-form" class="lab-controls">
+        <label class="lab-field">
+          <span>Fault / Event / Modifier</span>
+          <select id="lab-type" aria-label="Injection type"></select>
+        </label>
+
+        <label class="lab-field">
+          <span>Severity <strong id="lab-severity-val">0.70</strong></span>
+          <input id="lab-severity" type="range" min="0" max="1" step="0.05" value="0.7" aria-label="Severity">
+        </label>
+
+        <div class="lab-field">
+          <span>Onset (asset h)</span>
+          <div class="lab-onset-row">
+            <label class="lab-check">
+              <input id="lab-onset-now" type="checkbox" checked>
+              <span>Now</span>
+            </label>
+            <input id="lab-onset-h" type="number" min="0" step="1" value="0" disabled aria-label="Onset asset hours">
+          </div>
+        </div>
+
+        <label class="lab-field">
+          <span>Progression</span>
+          <select id="lab-progression" aria-label="Progression kind">
+            <option value="ramp">ramp</option>
+            <option value="step">step</option>
+            <option value="intermittent">intermittent</option>
+            <option value="stepwise">stepwise</option>
+          </select>
+        </label>
+
+        <label class="lab-field">
+          <span>Duration (h)</span>
+          <input id="lab-duration" type="number" min="0" step="1" value="240" aria-label="Duration hours">
+        </label>
+
+        <label class="lab-field" id="lab-signal-wrap" hidden>
+          <span>Target sensor</span>
+          <select id="lab-signal" aria-label="Target sensor signal"></select>
+        </label>
+
+        <div class="lab-submit-wrap">
+          <button id="lab-inject" type="submit" class="btn accent">Inject</button>
+        </div>
+      </form>
+
+      <div class="lab-footer">
+        <div class="lab-active-head">
+          <span class="lab-label">Active injections</span>
+          <div class="lab-actions">
+            <button id="lab-reset" type="button" class="btn">Reset</button>
+            <button id="lab-save" type="button" class="btn">Save JSON</button>
+            <button id="lab-load-btn" type="button" class="btn">Load JSON</button>
+            <input id="lab-load-file" type="file" accept="application/json,.json" hidden>
+          </div>
+        </div>
+        <div id="lab-active" class="lab-active-list">
+          <span class="hint">No active injections — nominal physics running.</span>
+        </div>
+        <div id="lab-signals" class="lab-signals"></div>
+      </div>
+    </section>
+
     <section class="panel ai" id="ai">
       <div class="panel-head">
         <h2>AI COPILOT</h2>

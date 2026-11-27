@@ -1,0 +1,393 @@
+# Declarative fault, weather, and sensor-modifier catalog.
+# Adding a new scenario is a data edit here rather than new simulator code.
+# Applied change for standard effects is: magnitude * severity * envelope(t).
+
+entries:
+  # -- gradual physical faults ------------------------------------------------
+  gearbox_bearing_wear:
+    label: Gearbox bearing wear
+    category: gradual
+    target_component: gearbox
+    description: Worn gearbox bearing increases oil temperature and vibration while slightly reducing output power.
+    default_progression:
+      kind: ramp
+      duration_h: 240
+    effects:
+      - signal: gearbox_temp_c
+        op: add
+        magnitude: 18.0
+      - signal: gearbox_vibration_mm_s
+        op: mul
+        magnitude: 1.8
+      - signal: active_power_kw
+        op: mul
+        magnitude: -0.04
+
+  generator_cooling_loss:
+    label: Generator cooling loss
+    category: gradual
+    target_component: generator
+    description: Cooling airflow loss overheats generator windings, raises converter warnings, and derates active power.
+    default_progression:
+      kind: ramp
+      duration_h: 200
+    effects:
+      - signal: generator_winding_temp_c
+        op: add
+        magnitude: 45.0
+      - signal: converter_faults
+        op: add
+        magnitude: 1.0
+      - signal: active_power_kw
+        op: mul
+        magnitude: -0.22
+
+  pitch_drift:
+    label: Pitch drift
+    category: gradual
+    target_component: pitch_system
+    description: Gradual blade pitch actuator calibration drift increases pitch angle and position error.
+    default_progression:
+      kind: ramp
+      duration_h: 240
+    effects:
+      - signal: pitch_angle_deg
+        op: add
+        magnitude: 6.5
+      - signal: pitch_position_error_deg
+        op: add
+        magnitude: 5.0
+      - signal: active_power_kw
+        op: mul
+        magnitude: -0.05
+
+  blade_imbalance:
+    label: Blade imbalance / ice
+    category: gradual
+    target_component: blade_set
+    description: Blade mass imbalance or leading-edge icing drives rotor imbalance, nacelle vibration, and aero loss.
+    default_progression:
+      kind: ramp
+      duration_h: 180
+    effects:
+      - signal: rotor_imbalance_index
+        op: add
+        magnitude: 0.85
+      - signal: nacelle_vibration_mm_s
+        op: add
+        magnitude: 3.4
+      - signal: active_power_kw
+        op: mul
+        magnitude: -0.08
+
+  lubrication_degradation:
+    label: Lubrication degradation
+    category: gradual
+    target_component: gearbox
+    description: Degraded oil film increases friction across drivetrain bearings and raises gearbox vibration.
+    default_progression:
+      kind: ramp
+      duration_h: 240
+    effects:
+      - signal: gearbox_temp_c
+        op: add
+        magnitude: 14.0
+      - signal: gearbox_vibration_mm_s
+        op: mul
+        magnitude: 1.2
+      - signal: main_bearing_temp
+        op: add
+        magnitude: 12.0
+
+  main_bearing_wear:
+    label: Main-bearing wear
+    category: gradual
+    target_component: main_bearing
+    description: Main rotor bearing fatigue increases bearing temperature, bearing vibration, and nacelle tremor.
+    default_progression:
+      kind: ramp
+      duration_h: 240
+    effects:
+      - signal: main_bearing_temp
+        op: add
+        magnitude: 42.0
+      - signal: main_bearing_vibration
+        op: mul
+        magnitude: 2.0
+      - signal: nacelle_vibration_mm_s
+        op: add
+        magnitude: 1.8
+
+  # -- sudden physical faults -------------------------------------------------
+  lightning:
+    label: Lightning strike
+    category: sudden
+    target_component: generator
+    description: Lightning surge trips power electronics, spikes generator winding temperature, and drops output.
+    default_progression:
+      kind: step
+      duration_h: 1
+    effects:
+      - signal: converter_faults
+        op: add
+        magnitude: 3.0
+      - signal: generator_winding_temp_c
+        op: add
+        magnitude: 42.0
+      - signal: active_power_kw
+        op: mul
+        magnitude: -0.75
+
+  converter_trip:
+    label: Converter trip
+    category: sudden
+    target_component: generator
+    description: Power converter protective trip disconnects generation and raises converter fault count.
+    default_progression:
+      kind: step
+      duration_h: 1
+    effects:
+      - signal: converter_faults
+        op: add
+        magnitude: 2.0
+      - signal: active_power_kw
+        op: mul
+        magnitude: -0.95
+
+  storm_overspeed:
+    label: Storm / overspeed
+    category: sudden
+    target_component: blade_set
+    description: Severe gust overspeeds the rotor and excites structural vibration across the drivetrain.
+    default_progression:
+      kind: step
+      duration_h: 2
+    effects:
+      - signal: wind_speed_ms
+        op: add
+        magnitude: 9.0
+      - signal: rotor_rpm
+        op: mul
+        magnitude: 0.22
+      - signal: nacelle_vibration_mm_s
+        op: add
+        magnitude: 3.6
+      - signal: gearbox_vibration_mm_s
+        op: add
+        magnitude: 2.4
+
+  bird_strike:
+    label: Bird strike
+    category: sudden
+    target_component: blade_set
+    description: Sudden blade impact introduces mass imbalance, nacelle vibration, and minor aerodynamic loss.
+    default_progression:
+      kind: step
+      duration_h: 1
+    effects:
+      - signal: rotor_imbalance_index
+        op: add
+        magnitude: 0.55
+      - signal: nacelle_vibration_mm_s
+        op: add
+        magnitude: 3.0
+      - signal: active_power_kw
+        op: mul
+        magnitude: -0.08
+
+  pitch_seizure:
+    label: Pitch seizure
+    category: sudden
+    target_component: pitch_system
+    description: Blade pitch feedback flat-lines at seizure onset while commanded pitch continues moving.
+    default_progression:
+      kind: step
+      duration_h: 1
+    special: pitch_seizure
+
+  # -- weather conditions (modify inputs; nominal physics responds) -----------
+  extreme_weather:
+    label: Extreme weather (heat + wind)
+    category: weather
+    target_component: null
+    description: High ambient temperature and strong wind let nominal thermal and aerodynamic models rise naturally.
+    default_progression:
+      kind: ramp
+      duration_h: 24
+    weather_inputs:
+      - input: wind_speed_ms
+        op: add
+        magnitude: 4.5
+      - input: ambient_temp_c
+        op: add
+        magnitude: 22.0
+
+  high_wind:
+    label: High wind
+    category: weather
+    target_component: null
+    description: Sustained high wind raises rated load and mechanical baseline temperatures naturally.
+    default_progression:
+      kind: ramp
+      duration_h: 16
+    weather_inputs:
+      - input: wind_speed_ms
+        op: add
+        magnitude: 4.0
+
+  cold_snap:
+    label: Cold snap
+    category: weather
+    target_component: null
+    description: Freezing ambient temperatures lower absolute oil and bearing temperatures without changing health.
+    default_progression:
+      kind: ramp
+      duration_h: 24
+    weather_inputs:
+      - input: ambient_temp_c
+        op: add
+        magnitude: -18.0
+
+  # -- sensor modifiers (corrupt measured only; truth untouched) --------------
+  sensor_stuck:
+    label: Sensor stuck (hold last value)
+    category: sensor
+    target_component: null
+    description: Holds the reported sensor value at onset while true machine physics keeps evolving.
+    default_progression:
+      kind: step
+      duration_h: 0
+    sensor_kind: stuck
+    default_params:
+      signal: gearbox_temp_c
+
+  sensor_dropout:
+    label: Sensor dropout (null / zero)
+    category: sensor
+    target_component: null
+    description: Reports zero (wire null stand-in) on the selected sensor without affecting true machine state.
+    default_progression:
+      kind: intermittent
+      duration_h: 48
+    sensor_kind: dropout
+    default_params:
+      signal: gearbox_temp_c
+
+  sensor_noise_burst:
+    label: Sensor noise burst
+    category: sensor
+    target_component: null
+    description: Injects seeded high-amplitude measurement noise onto one sensor channel only.
+    default_progression:
+      kind: intermittent
+      duration_h: 48
+    sensor_kind: noise_burst
+    default_params:
+      signal: gearbox_vibration_mm_s
+      scale: 3.5
+
+  sensor_bias_drift:
+    label: Sensor slow bias drift
+    category: sensor
+    target_component: null
+    description: Adds a slowly growing measurement offset to one sensor without altering true machine behavior.
+    default_progression:
+      kind: ramp
+      duration_h: 240
+    sensor_kind: bias_drift
+    default_params:
+      signal: gearbox_temp_c
+      bias: 12.0
+
+presets:
+  - id: nominal
+    label: Nominal
+    description: Clear all injections and return to clean nominal operation.
+    scenario: nominal
+    reset_t: true
+    playing: true
+    speed: 1.0
+    injections: []
+
+  - id: gearbox_wear
+    label: Gearbox wear
+    description: Gradual gearbox bearing wear ramping over 240 asset-hours.
+    scenario: nominal
+    reset_t: false
+    playing: true
+    speed: 5.0
+    injections:
+      - type: gearbox_bearing_wear
+        severity: 0.7
+        onset_asset_h: now
+        progression:
+          kind: ramp
+          duration_h: 240
+
+  - id: lightning_strike
+    label: Lightning strike
+    description: Immediate lightning strike causing converter faults and generator overheat.
+    scenario: nominal
+    reset_t: false
+    playing: true
+    speed: 1.0
+    injections:
+      - type: lightning
+        severity: 1.0
+        onset_asset_h: now
+        progression:
+          kind: step
+          duration_h: 1
+
+  - id: stuck_temp_sensor
+    label: Stuck temp sensor
+    description: Gearbox oil temperature sensor freezes while machine physics continues normally.
+    scenario: nominal
+    reset_t: false
+    playing: true
+    speed: 2.0
+    injections:
+      - type: sensor_stuck
+        severity: 1.0
+        onset_asset_h: now
+        progression:
+          kind: step
+          duration_h: 0
+        params:
+          signal: gearbox_temp_c
+
+  - id: extreme_weather
+    label: Extreme weather
+    description: Heatwave and high wind elevate raw temperatures naturally without a fault.
+    scenario: nominal
+    reset_t: false
+    playing: true
+    speed: 2.0
+    injections:
+      - type: extreme_weather
+        severity: 1.0
+        onset_asset_h: now
+        progression:
+          kind: ramp
+          duration_h: 24
+
+  - id: wear_plus_storm
+    label: Wear + storm
+    description: Gradual gearbox wear compounded by a sudden storm overspeed event.
+    scenario: nominal
+    reset_t: false
+    playing: true
+    speed: 4.0
+    injections:
+      - type: gearbox_bearing_wear
+        severity: 0.7
+        onset_asset_h: now
+        progression:
+          kind: ramp
+          duration_h: 240
+      - type: storm_overspeed
+        severity: 0.9
+        onset_asset_h: now
+        progression:
+          kind: step
+          duration_h: 2

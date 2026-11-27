@@ -59,3 +59,17 @@ def test_index_is_not_in_the_openapi_schema() -> None:
 
     assert "/api/state" in paths
     assert "/" not in paths
+
+
+def test_console_has_the_scenario_lab_panel() -> None:
+    page = client.get("/").text
+    script = client.get("/static/app.js").text
+
+    assert 'id="scenario-lab"' in page
+    assert "Injected (hidden from predictor)" in page
+    assert 'id="lab-type"' in page
+    assert 'id="lab-presets"' in page
+    assert 'id="lab-reset"' in page
+    assert 'id="lab-save"' in page
+    assert "/api/inject/catalog" in script
+    assert "/api/inject/reset" in script

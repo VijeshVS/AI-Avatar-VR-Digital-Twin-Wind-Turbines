@@ -27,12 +27,20 @@ from __future__ import annotations
 import hashlib
 import math
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from .injection.engine import (
+    apply_physical_injections,
+    apply_sensor_injections,
+    weather_deltas,
+)
+from .injection.models import Injection
 from .models import (
     COMPONENT_LABELS,
     DEFAULT_TURBINE_ID,
+    UNITS,
     Environment,
     Sample,
     Signal,
@@ -377,36 +385,17 @@ class DropoutModifier:
         return sample.with_measured({self.signal: 0.0})
 
 
-# Signal ids and units, in wire order. New signals are appended so older clients
-# keep receiving the fields they already know.
-UNITS: dict[str, str] = {
-    "wind_speed_ms": "m/s",
-    "ambient_temp_c": "degC",
-    "rotor_rpm": "rpm",
-    "active_power_kw": "kW",
-    "power_ratio": "0-1",
-    "yaw_deg": "deg",
-    "gearbox_temp_c": "degC",
-    "gearbox_temp_rise_c": "degC",
-    "gearbox_vibration_mm_s": "mm/s",
-    "nacelle_vibration_mm_s": "mm/s",
-    "generator_winding_temp_c": "degC",
-    "converter_faults": "count",
-    "pitch_angle_deg": "deg",
-    "pitch_position_error_deg": "deg",
-    "blade_pass_hz": "Hz",
-    "rotor_angle_deg": "deg",
-    "rotor_imbalance_index": "0-1",
-    "main_bearing_temp": "degC",
-    "main_bearing_vibration": "mm/s",
-}
-
-
-def _nominal_values(t: float) -> tuple[dict[str, float], dict[str, float]]:
+def _nominal_values(
+    t: float,
+    wind_delta: float = 0.0,
+    ambient_delta: float = 0.0,
+) -> tuple[dict[str, float], dict[str, float]]:
     """Healthy machine state at time ``t`` plus the internal values modifiers need."""
     wind = wind_speed(t)
+    if wind_delta != 0.0:
+        wind = _clamp(wind + wind_delta, 0.0, CUT_OUT_MS + 2.0)
     rpm_base = rotor_rpm(wind)
-    ambient = 9.0 + 4.0 * _noise(t, 11.0, 1.0) + 0.02 * t
+    ambient = 9.0 + 4.0 * _noise(t, 11.0, 1.0) + 0.02 * t + ambient_delta
 
     load_fraction = _clamp(rpm_base / RATED_RPM, 0.0, 1.0)
     # Oil temperature rides on load: baseline rise over ambient at idle plus a
@@ -517,32 +506,32 @@ def sensor_modifiers(scenario: str) -> list[Modifier]:
     return []
 
 
-def build_sample(
+def _build_pre_sensor_sample(
     t: float,
     scenario: str | None = None,
     turbine_id: str = DEFAULT_TURBINE_ID,
     turbine_seed: int = DEFAULT_TURBINE_SEED,
     modifiers: list[Modifier] | None = None,
     tick: int | None = None,
-) -> Sample:
-    """Run one tick through the full pipeline.
-
-    ``modifiers=None`` uses the scenario's physical and sensor stages.
-    Passing an explicit list (including ``[]``) bypasses the scenario defaults,
-    which is what makes the nominal generator directly testable.
-    """
+    injections: Sequence[Injection] = (),
+) -> tuple[Sample, ModifierContext, str]:
+    """Run nominal + weather + physical stages without sensor-quality modifiers."""
     scenario_id = scenario or default_scenario()
     spec = SCENARIOS.get(scenario_id, SCENARIOS[default_scenario()])
     scenario_id = spec.id
 
     t = max(0.0, float(t))
     tick_index = tick_index_at(t) if tick is None else max(0, int(tick))
+    asset_h = asset_time_hours(t)
 
-    true, meta = _nominal_values(t)
+    wind_delta, ambient_delta = (
+        weather_deltas(injections, asset_h) if injections else (0.0, 0.0)
+    )
+    true, meta = _nominal_values(t, wind_delta=wind_delta, ambient_delta=ambient_delta)
     sample = Sample(
         turbine_id=turbine_id or DEFAULT_TURBINE_ID,
         tick=tick_index,
-        asset_time_h=asset_time_hours(t),
+        asset_time_h=asset_h,
         elapsed_s=t,
         scenario=scenario_id,
         true=true,
@@ -560,13 +549,79 @@ def build_sample(
         progress=scenario_progress(t, spec),
     )
 
-    pipeline = (
-        physical_modifiers(scenario_id) + sensor_modifiers(scenario_id)
-        if modifiers is None
-        else list(modifiers)
+    if modifiers is None:
+        for modifier in physical_modifiers(scenario_id):
+            sample = modifier.apply(sample, sample.asset_time_h, ctx)
+        if injections:
+            def _onset_pitch(onset_h: float) -> float:
+                onset_s = sim_seconds_for_asset_hours(onset_h)
+                w_d, a_d = weather_deltas(injections, onset_h)
+                base_true, _ = _nominal_values(onset_s, wind_delta=w_d, ambient_delta=a_d)
+                return base_true["pitch_angle_deg"]
+
+            sample = apply_physical_injections(
+                sample, injections, sample.asset_time_h, onset_pitch_fn=_onset_pitch
+            )
+    else:
+        for modifier in modifiers:
+            sample = modifier.apply(sample, sample.asset_time_h, ctx)
+
+    return sample, ctx, scenario_id
+
+
+def build_sample(
+    t: float,
+    scenario: str | None = None,
+    turbine_id: str = DEFAULT_TURBINE_ID,
+    turbine_seed: int = DEFAULT_TURBINE_SEED,
+    modifiers: list[Modifier] | None = None,
+    tick: int | None = None,
+    injections: Sequence[Injection] = (),
+) -> Sample:
+    """Run one tick through the full pipeline.
+
+    ``modifiers=None`` uses the scenario's physical and sensor stages plus any
+    active Scenario Lab injections. Passing an explicit list (including ``[]``)
+    bypasses the scenario defaults, which is what makes the nominal generator
+    directly testable.
+    """
+    sample, ctx, scenario_id = _build_pre_sensor_sample(
+        t,
+        scenario=scenario,
+        turbine_id=turbine_id,
+        turbine_seed=turbine_seed,
+        modifiers=modifiers,
+        tick=tick,
+        injections=injections,
     )
-    for modifier in pipeline:
-        sample = modifier.apply(sample, sample.asset_time_h, ctx)
+
+    if modifiers is None:
+        for modifier in sensor_modifiers(scenario_id):
+            sample = modifier.apply(sample, sample.asset_time_h, ctx)
+
+    if injections and modifiers is None:
+        def _pre_sensor_at(onset_h: float) -> Sample:
+            onset_tick = tick_index_at(sim_seconds_for_asset_hours(onset_h))
+            onset_s = sim_seconds_for_tick(onset_tick)
+            pre_sample, _, _ = _build_pre_sensor_sample(
+                onset_s,
+                scenario=scenario_id,
+                turbine_id=sample.turbine_id,
+                turbine_seed=turbine_seed,
+                modifiers=None,
+                tick=onset_tick,
+                injections=injections,
+            )
+            return pre_sample
+
+        sample = apply_sensor_injections(
+            sample,
+            injections,
+            sample.asset_time_h,
+            turbine_seed=turbine_seed,
+            pre_sensor_fn=_pre_sensor_at,
+        )
+
     return sample
 
 
@@ -576,6 +631,7 @@ def sample_at_tick(
     turbine_id: str = DEFAULT_TURBINE_ID,
     turbine_seed: int = DEFAULT_TURBINE_SEED,
     modifiers: list[Modifier] | None = None,
+    injections: Sequence[Injection] = (),
 ) -> Sample:
     """Canonical random-access entry point: one sample per asset-hour tick."""
     tick = max(0, int(tick))
@@ -586,6 +642,7 @@ def sample_at_tick(
         turbine_seed=turbine_seed,
         modifiers=modifiers,
         tick=tick,
+        injections=injections,
     )
 
 
@@ -595,6 +652,7 @@ def sample_at(
     turbine_id: str = DEFAULT_TURBINE_ID,
     turbine_seed: int = DEFAULT_TURBINE_SEED,
     modifiers: list[Modifier] | None = None,
+    injections: Sequence[Injection] = (),
 ) -> Sample:
     """Sample the tick nearest to ``sim_seconds``."""
     return sample_at_tick(
@@ -603,6 +661,7 @@ def sample_at(
         turbine_id=turbine_id,
         turbine_seed=turbine_seed,
         modifiers=modifiers,
+        injections=injections,
     )
 
 
@@ -613,6 +672,7 @@ def simulate(
     turbine_id: str = DEFAULT_TURBINE_ID,
     modifiers: list[Modifier] | None = None,
     turbine_seed: int = DEFAULT_TURBINE_SEED,
+    injections: Sequence[Injection] = (),
 ) -> Sample:
     return build_sample(
         t,
@@ -620,6 +680,7 @@ def simulate(
         turbine_id=turbine_id,
         turbine_seed=turbine_seed,
         modifiers=modifiers,
+        injections=injections,
     )
 
 

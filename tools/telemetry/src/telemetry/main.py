@@ -18,7 +18,7 @@ order, i.e. when the client is actually streaming.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from . import copilot
 from . import health as health_mod
+from . import injection as injection_mod
 from . import prognosis as prognosis_mod
 from . import simulation
 from .models import (
@@ -34,6 +35,7 @@ from .models import (
     DEFAULT_TURBINE_ID,
     SCHEMA_VERSION,
     ComponentHealth,
+    Sample,
     TelemetryFrame,
 )
 from .session import SessionState
@@ -91,6 +93,36 @@ class AssistantRequest(BaseModel):
     )
 
 
+class ProgressionRequest(BaseModel):
+    kind: Literal["ramp", "step", "intermittent", "stepwise"] = "ramp"
+    duration_h: float = Field(default=240.0, ge=0.0)
+    curve: Literal["linear", "exponential"] = "linear"
+    steps: int = Field(default=5, ge=2, le=50)
+    settle_h: float | None = Field(default=None, ge=0.0)
+    period_h: float | None = Field(default=None, gt=0.0)
+    duty: float = Field(default=0.55, gt=0.0, le=1.0)
+
+
+class InjectionRequest(BaseModel):
+    turbine_id: str = Field(default=DEFAULT_TURBINE_ID)
+    type: str = Field(..., min_length=1)
+    severity: float = Field(default=1.0, ge=0.0, le=1.0)
+    onset_asset_h: float | Literal["now"] | None = Field(default="now")
+    progression: ProgressionRequest | None = None
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResetInjectionsRequest(BaseModel):
+    turbine_id: str | None = None
+    reset_t: bool = False
+
+
+class ImportScenarioRequest(BaseModel):
+    schema_version: int = 1
+    scenario: str | None = None
+    injections: list[dict[str, Any]]
+
+
 state = SessionState()
 
 
@@ -123,6 +155,16 @@ def _smooth(component, streaming: bool, turbine_id: str) -> ComponentHealth:
     )
 
 
+def _sample_for_prognosis(tick_t: float, scenario: str, turbine_id: str) -> Sample:
+    """Telemetry stream sampler handed to prognosis; never exposes injections."""
+    return simulation.sample_at_tick(
+        simulation.tick_index_at(tick_t),
+        scenario,
+        turbine_id=turbine_id,
+        injections=state.injections.for_turbine(turbine_id),
+    )
+
+
 def frame_at(
     elapsed_s: float,
     scenario: str | None = None,
@@ -134,7 +176,10 @@ def frame_at(
 
     turbine_id = turbine_id or DEFAULT_TURBINE_ID
     requested = max(0.0, elapsed_s)
-    sample = simulation.sample_at(requested, target, turbine_id=turbine_id)
+    active_injections = state.injections.for_turbine(turbine_id)
+    sample = simulation.sample_at(
+        requested, target, turbine_id=turbine_id, injections=active_injections
+    )
     elapsed = sample.elapsed_s
 
     streaming = elapsed >= state.last_elapsed_s
@@ -160,6 +205,11 @@ def frame_at(
         if key[0] != turbine_id
     } | {(turbine_id, component.id): component.health for component in components}
 
+    healthy_asset = (
+        simulation.SCENARIOS[target].healthy_asset
+        and not injection_mod.has_physical_fault(active_injections, sample.asset_time_h)
+    )
+
     return TelemetryFrame(
         schema_version=SCHEMA_VERSION,
         turbine_id=turbine_id,
@@ -167,7 +217,7 @@ def frame_at(
         asset_time_h=sample.asset_time_h,
         elapsed_s=elapsed,
         scenario=target,
-        healthy_asset=simulation.SCENARIOS[target].healthy_asset,
+        healthy_asset=healthy_asset,
         environment=simulation.environment_from(sample.measured),
         signals=sample.signals,
         components=components,
@@ -336,6 +386,7 @@ def state_snapshot(turbine_id: str = DEFAULT_TURBINE_ID) -> dict[str, object]:
         frame.scenario,
         {c.id: c.health for c in frame.components},
         turbine_id=frame.turbine_id,
+        sample_at_t=_sample_for_prognosis,
     )
 
     session = state.snapshot()
@@ -361,6 +412,7 @@ def prognosis(
         frame.scenario,
         {c.id: c.health for c in frame.components},
         turbine_id=frame.turbine_id,
+        sample_at_t=_sample_for_prognosis,
     ).to_dict()
 
 
@@ -377,6 +429,7 @@ def assistant(request: AssistantRequest) -> dict[str, object]:
         frame.scenario,
         {c.id: c.health for c in frame.components},
         turbine_id=frame.turbine_id,
+        sample_at_t=_sample_for_prognosis,
     )
 
     if request.mode == "procedure":
@@ -400,6 +453,115 @@ def assistant(request: AssistantRequest) -> dict[str, object]:
         }
     )
     return payload
+
+
+# -- Scenario Lab injection endpoints ----------------------------------------
+
+
+@app.get("/api/inject/catalog")
+def inject_catalog() -> dict[str, object]:
+    """Catalog metadata, signals, and one-click presets for the Scenario Lab UI."""
+    return injection_mod.catalog_metadata()
+
+
+@app.get("/api/inject")
+def list_injections(turbine_id: str | None = None) -> dict[str, object]:
+    """List active injections (optionally filtered by ``turbine_id``)."""
+    return {
+        "injections": [inj.to_dict() for inj in state.injections.list(turbine_id)]
+    }
+
+
+@app.post("/api/inject")
+def create_injection(request: InjectionRequest) -> dict[str, object]:
+    """Validate and register an injection; resolves 'now' to current asset time."""
+    now_h = simulation.asset_time_hours(state.current_elapsed())
+    progression = (
+        request.progression.model_dump() if request.progression is not None else None
+    )
+    try:
+        inj = state.injections.add(
+            type_id=request.type,
+            severity=request.severity,
+            onset_asset_h=request.onset_asset_h,
+            now_asset_h=now_h,
+            progression=progression,
+            params=request.params,
+            turbine_id=request.turbine_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    state.clear_health_cache()
+    return inj.to_dict()
+
+
+@app.post("/api/inject/reset")
+def reset_injections(
+    request: ResetInjectionsRequest | None = None,
+) -> dict[str, object]:
+    """Clear active injections and return the simulation to clean nominal."""
+    turbine_id = request.turbine_id if request is not None else None
+    reset_t = request.reset_t if request is not None else False
+    state.injections.clear(turbine_id)
+    if turbine_id is None:
+        state.select("nominal", reset_t=reset_t)
+    else:
+        state.clear_health_cache()
+    return {
+        "scenario": state.scenario,
+        "injections": [inj.to_dict() for inj in state.injections.list()],
+    }
+
+
+@app.get("/api/inject/export")
+def export_injections() -> dict[str, object]:
+    """Export the active scenario and injections as reproducible JSON."""
+    return state.injections.export_payload(state.scenario)
+
+
+@app.post("/api/inject/import")
+def import_injections(request: ImportScenarioRequest) -> dict[str, object]:
+    """Validate and load an exported scenario JSON into session state."""
+    if request.scenario is not None and request.scenario not in simulation.SCENARIOS:
+        raise HTTPException(
+            status_code=422, detail=f"unknown scenario '{request.scenario}'"
+        )
+    now_h = simulation.asset_time_hours(state.current_elapsed())
+    try:
+        imported = state.injections.import_payload(
+            {
+                "schema_version": request.schema_version,
+                "scenario": request.scenario,
+                "injections": request.injections,
+            },
+            now_asset_h=now_h,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if request.scenario is not None:
+        state.select(request.scenario, reset_t=False)
+    else:
+        state.clear_health_cache()
+    return {
+        "scenario": state.scenario,
+        "injections": [inj.to_dict() for inj in imported],
+    }
+
+
+@app.delete("/api/inject/{injection_id}")
+def delete_injection(injection_id: str) -> dict[str, object]:
+    """Remove a single active injection by id."""
+    if not state.injections.remove(injection_id):
+        raise HTTPException(
+            status_code=404, detail=f"unknown injection '{injection_id}'"
+        )
+    state.clear_health_cache()
+    return {
+        "deleted": injection_id,
+        "injections": [inj.to_dict() for inj in state.injections.list()],
+    }
 
 
 def recommendation(worst) -> str:

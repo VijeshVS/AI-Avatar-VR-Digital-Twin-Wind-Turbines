@@ -248,7 +248,11 @@ It is best described as an end-to-end wind-turbine digital-twin demonstrator, no
 
 ## Repository state note
 
-The Phase 0 foundations are in place: the layered simulator, deterministic
-one-asset-hour sampling, `turbine_id` on the wire, and dedicated main-bearing
-signals. The last single-turbine state is tagged `v0-single-turbine`; later
-phases build on this branch.
+Phase 0 foundations and Phase 1 Scenario Lab + injection engine are in place:
+- Declarative catalog (`catalog.yaml`), four pure time envelopes (`ramp`, `step`,
+  `intermittent`, `stepwise`), weather input offsets, cross-signal `pitch_seizure`,
+  and truth-preserving sensor modifiers (`stuck`, `dropout`, `noise_burst`,
+  `bias_drift`).
+- `/api/inject*` CRUD, reset, catalog, and JSON import/export endpoints.
+- Browser console Scenario Lab panel with one-click demo presets.
+The last single-turbine state is tagged `v0-single-turbine`; later phases build on `main`.

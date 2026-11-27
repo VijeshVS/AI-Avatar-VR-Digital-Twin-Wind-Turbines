@@ -42,6 +42,30 @@ COMPONENT_LABELS = {
     "pitch_system": "Pitch System",
 }
 
+# Signal ids and units, in wire order. New signals are appended so older clients
+# keep receiving the fields they already know.
+UNITS: dict[str, str] = {
+    "wind_speed_ms": "m/s",
+    "ambient_temp_c": "degC",
+    "rotor_rpm": "rpm",
+    "active_power_kw": "kW",
+    "power_ratio": "0-1",
+    "yaw_deg": "deg",
+    "gearbox_temp_c": "degC",
+    "gearbox_temp_rise_c": "degC",
+    "gearbox_vibration_mm_s": "mm/s",
+    "nacelle_vibration_mm_s": "mm/s",
+    "generator_winding_temp_c": "degC",
+    "converter_faults": "count",
+    "pitch_angle_deg": "deg",
+    "pitch_position_error_deg": "deg",
+    "blade_pass_hz": "Hz",
+    "rotor_angle_deg": "deg",
+    "rotor_imbalance_index": "0-1",
+    "main_bearing_temp": "degC",
+    "main_bearing_vibration": "mm/s",
+}
+
 
 @dataclass(frozen=True)
 class Signal:

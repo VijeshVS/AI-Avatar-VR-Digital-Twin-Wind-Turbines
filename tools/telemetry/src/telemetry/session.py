@@ -21,6 +21,7 @@ from collections.abc import Callable
 from typing import Any
 
 from . import simulation
+from .injection.state import InjectionStore
 
 DEFAULT_SPEED = 1.0
 MIN_SPEED = 0.1
@@ -84,6 +85,9 @@ class SessionState:
         self.previous_health: dict[tuple[str, str], float] = {}
         self.smoothed_health: dict[tuple[str, str], float] = {}
 
+        # Active Scenario Lab injections; never exposed directly to the predictor.
+        self.injections: InjectionStore = InjectionStore()
+
     # -- clock -------------------------------------------------------------
 
     def current_elapsed(self) -> float:
@@ -112,12 +116,16 @@ class SessionState:
 
     # -- scenario and focus -------------------------------------------------
 
-    def select(self, scenario: str, reset_t: bool = True) -> None:
-        """Switch the fault programme and, by default, restart its ramp."""
-        self.scenario = scenario
+    def clear_health_cache(self) -> None:
+        """Reset trend/smoothing history after a scenario or injection change."""
         self.last_elapsed_s = -1.0
         self.previous_health.clear()
         self.smoothed_health.clear()
+
+    def select(self, scenario: str, reset_t: bool = True) -> None:
+        """Switch the fault programme and, by default, restart its ramp."""
+        self.scenario = scenario
+        self.clear_health_cache()
         if reset_t:
             self.seek(0.0)
 
