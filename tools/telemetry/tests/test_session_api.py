@@ -147,12 +147,13 @@ def test_state_is_one_coherent_snapshot() -> None:
 
     payload = client.get("/api/state").json()
 
-    assert set(payload) == {"session", "frame", "prognosis"}
+    assert set(payload) == {"session", "frame", "prognosis", "predictions"}
     assert payload["session"]["t"] == payload["frame"]["elapsed_s"] == 60.0
     assert payload["prognosis"]["t"] == 60.0
     assert payload["session"]["scenario"] == payload["frame"]["scenario"]
     assert payload["frame"]["components"]
     assert payload["prognosis"]["components"]
+    assert payload["predictions"]
 
 
 def test_state_tracks_a_scenario_switch() -> None:

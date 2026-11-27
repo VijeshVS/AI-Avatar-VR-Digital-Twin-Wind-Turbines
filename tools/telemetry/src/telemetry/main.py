@@ -8,6 +8,9 @@ Endpoints
 ``GET  /api/components``       health only, for lightweight polling
 ``GET  /api/fault``            structured verdict + maintenance recommendation
 ``POST /api/scenario/{id}``    switch the active scenario
+``GET  /api/predictions``      Phase-2 predictor prognoses per component
+``GET  /api/events``           SSE stream of predictor alert events
+``GET  /api/events/log``       full event history
 
 The clock is explicit (``t``) rather than wall-clock: the client asks for the
 frame it wants, so playback is reproducible and the Unity tests are stable.
@@ -17,11 +20,16 @@ order, i.e. when the client is actually streaming.
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
+import queue
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -38,12 +46,36 @@ from .models import (
     Sample,
     TelemetryFrame,
 )
+from .predictor.registry import PredictorRegistry, make_injection_fingerprint
 from .session import SessionState
+
+
+async def _predictor_clock() -> None:
+    """Advance the default turbine even when no client is polling frames."""
+    while True:
+        try:
+            await asyncio.to_thread(_update_shared_prediction)
+        except Exception:
+            logging.getLogger(__name__).exception("Predictor clock failed")
+        await asyncio.sleep(simulation.SIM_SECONDS_PER_ASSET_HOUR)
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    task = asyncio.create_task(_predictor_clock())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
 
 app = FastAPI(
     title="Wind Turbine Digital Twin Telemetry",
     version="0.1.0",
     description="Synthetic telemetry and explainable health scoring for the VR digital-twin PoC.",
+    lifespan=_lifespan,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -124,6 +156,28 @@ class ImportScenarioRequest(BaseModel):
 
 
 state = SessionState()
+predictor = PredictorRegistry()
+
+
+def _update_shared_prediction() -> None:
+    """Feed the shared clock through the same seek-safe measured stream."""
+    turbine_id = DEFAULT_TURBINE_ID
+    target = state.scenario
+    active_injections = state.injections.for_turbine(turbine_id)
+    tick = simulation.tick_index_at(state.current_elapsed())
+
+    def source(index: int) -> Sample:
+        return simulation.sample_at_tick(
+            index, target, turbine_id=turbine_id, injections=active_injections
+        )
+
+    predictor.update(
+        source(tick),
+        injection_fingerprint=make_injection_fingerprint(
+            [inj.to_dict() for inj in active_injections]
+        ),
+        sample_source=source,
+    )
 
 
 def _smooth(component, streaming: bool, turbine_id: str) -> ComponentHealth:
@@ -210,6 +264,24 @@ def frame_at(
         and not injection_mod.has_physical_fault(active_injections, sample.asset_time_h)
     )
 
+    # Phase-2 predictor: tick on every frame (measured signals only).  The
+    # registry replays from t=0 on a backward seek or injection change, using
+    # the same deterministic sample source, so the result never depends on how
+    # the operator navigated to this moment.
+    inj_fp = make_injection_fingerprint(
+        [inj.to_dict() for inj in active_injections]
+    )
+    predictor.update(
+        sample,
+        injection_fingerprint=inj_fp,
+        sample_source=lambda tick: simulation.sample_at_tick(
+            tick,
+            target,
+            turbine_id=turbine_id,
+            injections=active_injections,
+        ),
+    )
+
     return TelemetryFrame(
         schema_version=SCHEMA_VERSION,
         turbine_id=turbine_id,
@@ -221,6 +293,33 @@ def frame_at(
         environment=simulation.environment_from(sample.measured),
         signals=sample.signals,
         components=components,
+    )
+
+
+def _predictions_for_frame(frame: TelemetryFrame):
+    """Return predictor state aligned to exactly the frame's tick and stream."""
+    current = predictor.current(frame.turbine_id)
+    if current and all(
+        prognosis.asset_time_h == frame.asset_time_h for prognosis in current.values()
+    ):
+        return current
+
+    active_injections = state.injections.for_turbine(frame.turbine_id)
+
+    def source(tick: int) -> Sample:
+        return simulation.sample_at_tick(
+            tick,
+            frame.scenario,
+            turbine_id=frame.turbine_id,
+            injections=active_injections,
+        )
+
+    return predictor.update(
+        source(frame.tick),
+        injection_fingerprint=make_injection_fingerprint(
+            [inj.to_dict() for inj in active_injections]
+        ),
+        sample_source=source,
     )
 
 
@@ -264,7 +363,14 @@ def telemetry(
     ask for a specific moment and must keep receiving exactly that frame.
     """
     elapsed = t if t is not None else state.current_elapsed()
-    return JSONResponse(frame_at(elapsed, scenario, turbine_id).to_dict())
+    frame = frame_at(elapsed, scenario, turbine_id)
+    payload = frame.to_dict()
+    current = _predictions_for_frame(frame)
+    # Only attach a snapshot from the same tick: another client may have
+    # requested a different time while this request was being served.
+    if all(p.asset_time_h == frame.asset_time_h for p in current.values()):
+        payload["predictions"] = [p.to_dict() for p in current.values()]
+    return JSONResponse(payload)
 
 
 @app.get("/api/components")
@@ -391,10 +497,15 @@ def state_snapshot(turbine_id: str = DEFAULT_TURBINE_ID) -> dict[str, object]:
 
     session = state.snapshot()
     session["t"] = round(frame.elapsed_s, 2)
+    predictions = _predictions_for_frame(frame)
     return {
         "session": session,
         "frame": frame.to_dict(),
         "prognosis": estimate.to_dict(),
+        "predictions": {
+            component: prognosis.to_dict()
+            for component, prognosis in predictions.items()
+        },
     }
 
 
@@ -433,9 +544,13 @@ def assistant(request: AssistantRequest) -> dict[str, object]:
     )
 
     if request.mode == "procedure":
-        payload = copilot.ask_procedure(request.question, frame, estimate).to_dict()
+        payload = copilot.ask_procedure(
+            request.question, frame, estimate, _predictions_for_frame(frame)
+        ).to_dict()
     else:
-        payload = copilot.ask(request.question, frame, estimate).to_dict()
+        payload = copilot.ask(
+            request.question, frame, estimate, _predictions_for_frame(frame)
+        ).to_dict()
 
     worst = min(frame.components, key=lambda c: c.health, default=None)
     payload.update(
@@ -493,6 +608,7 @@ def create_injection(request: InjectionRequest) -> dict[str, object]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     state.clear_health_cache()
+    predictor.invalidate(request.turbine_id)
     return inj.to_dict()
 
 
@@ -504,6 +620,7 @@ def reset_injections(
     turbine_id = request.turbine_id if request is not None else None
     reset_t = request.reset_t if request is not None else False
     state.injections.clear(turbine_id)
+    predictor.invalidate(turbine_id)
     if turbine_id is None:
         state.select("nominal", reset_t=reset_t)
     else:
@@ -544,6 +661,7 @@ def import_injections(request: ImportScenarioRequest) -> dict[str, object]:
         state.select(request.scenario, reset_t=False)
     else:
         state.clear_health_cache()
+    predictor.invalidate()
     return {
         "scenario": state.scenario,
         "injections": [inj.to_dict() for inj in imported],
@@ -558,10 +676,74 @@ def delete_injection(injection_id: str) -> dict[str, object]:
             status_code=404, detail=f"unknown injection '{injection_id}'"
         )
     state.clear_health_cache()
+    predictor.invalidate()
     return {
         "deleted": injection_id,
         "injections": [inj.to_dict() for inj in state.injections.list()],
     }
+
+
+# -- Phase-2 predictor endpoints --------------------------------------------
+
+
+@app.get("/api/predictions")
+def predictions(turbine_id: str = DEFAULT_TURBINE_ID) -> dict[str, object]:
+    """Current predictor prognoses per component for the given turbine."""
+    frame = frame_at(state.current_elapsed(), state.scenario, turbine_id)
+    current = _predictions_for_frame(frame)
+    return {
+        "turbine_id": turbine_id,
+        "components": {comp: prog.to_dict() for comp, prog in current.items()},
+    }
+
+
+@app.get("/api/events/log")
+def events_log(turbine_id: str = DEFAULT_TURBINE_ID) -> dict[str, object]:
+    """Full event history for the given turbine."""
+    return {
+        "turbine_id": turbine_id,
+        "events": predictor.event_history(turbine_id),
+    }
+
+
+@app.get("/api/events")
+async def events_sse(turbine_id: str = DEFAULT_TURBINE_ID) -> StreamingResponse:
+    """Server-Sent Events stream of predictor alert events.
+
+    Clients subscribe with ``EventSource('/api/events')``.  Each new event is
+    emitted once as a JSON payload; the client appends it to its own log.
+    ``: keepalive`` comments keep idle proxies from closing the connection.
+    """
+    def _next(timeout: float):
+        try:
+            return alerts.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    async def _generator():
+        nonlocal alerts
+        alerts = predictor.subscribe(turbine_id)
+        try:
+            yield ": connected\n\n"
+            while True:
+                alert = await asyncio.to_thread(_next, 15.0)
+                if alert is None:
+                    yield ": keepalive\n\n"
+                    continue
+                payload = {"turbine_id": alert.turbine_id, **alert.event}
+                yield f"data: {json.dumps(payload)}\n\n"
+        finally:
+            predictor.unsubscribe(alerts)
+
+    alerts = None
+    return StreamingResponse(
+        _generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def recommendation(worst) -> str:

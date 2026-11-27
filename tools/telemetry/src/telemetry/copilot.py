@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -74,6 +75,7 @@ Rules:
 - If a component has health 1.0 and no top_factor, describe it as nominal.
 - Be concrete: name the component, its health percentage, and its dominant factor.
 - If band is "unknown", say there is not enough history yet instead of guessing a date.
+- If predictions contains a days range, quote that range; never compute a new one.
 - Answer in at most three sentences of plain prose. No markdown, no bullet lists.
 - End with exactly one recommended next action.
 - Reply with JSON only, in this shape:
@@ -139,7 +141,48 @@ def _top_factor(component) -> dict[str, Any] | None:
     }
 
 
-def build_context(frame: TelemetryFrame, estimate: prognosis_mod.PlantPrognosis) -> dict[str, Any]:
+def _prediction_context(predictions: dict[str, Any] | None) -> dict[str, Any]:
+    """Compact Phase-2 prognosis view for the model.
+
+    Every numeric value the model may quote is present here; the post-check in
+    :func:`_grounded` rejects an answer that introduces any other number.
+    """
+    if not predictions:
+        return {}
+
+    compact: dict[str, Any] = {}
+    for component_id, prognosis in predictions.items():
+        payload = prognosis.to_dict() if hasattr(prognosis, "to_dict") else dict(prognosis)
+        compact[component_id] = {
+            "health": payload.get("health"),
+            "state": payload.get("state"),
+            "status": payload.get("status"),
+            "band": payload.get("band"),
+            "ttf_days": payload.get("ttf_days"),
+            "confidence": payload.get("confidence"),
+            "top_contributors": [
+                contributor.get("text")
+                for contributor in payload.get("top_contributors", [])
+                if contributor.get("text")
+            ],
+            "active_events": [
+                {
+                    "type": event.get("type"),
+                    "status": event.get("status"),
+                    "message": event.get("message"),
+                }
+                for event in payload.get("active_events", [])
+            ],
+            "sensor_faults": payload.get("sensor_faults", []),
+        }
+    return compact
+
+
+def build_context(
+    frame: TelemetryFrame,
+    estimate: prognosis_mod.PlantPrognosis,
+    predictions: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """The compact, model-readable view of one frame. Numbers come from here only."""
     by_id = {c.component_id: c for c in estimate.components}
     components = []
@@ -174,6 +217,7 @@ def build_context(frame: TelemetryFrame, estimate: prognosis_mod.PlantPrognosis)
             "active_power_kw": round(frame.environment.active_power_kw),
         },
         "components": components,
+        "predictions": _prediction_context(predictions),
         "available_scenarios": list(simulation.SCENARIOS),
         "recommendation": health_mod.maintenance_recommendation(
             min(frame.components, key=lambda c: c.health, default=None)
@@ -308,6 +352,39 @@ def _parse_reply(content: str) -> tuple[str, tuple[dict[str, Any], ...]]:
     return answer.strip()[:MAX_ANSWER_CHARS], validate_actions(payload.get("actions"))
 
 
+def _numbers_in_text(text: str) -> list[float]:
+    return [float(match) for match in re.findall(r"(?<![\w.])[-+]?\d+(?:\.\d+)?", text)]
+
+
+def _allowed_numbers(value: Any, collected: set[float]) -> None:
+    """Collect every representation of every number in the context."""
+    if isinstance(value, dict):
+        for item in value.values():
+            _allowed_numbers(item, collected)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _allowed_numbers(item, collected)
+    elif isinstance(value, bool):
+        return
+    elif isinstance(value, (int, float)):
+        collected.add(float(value))
+    elif isinstance(value, str):
+        for number in _numbers_in_text(value):
+            _allowed_numbers(number, collected)
+
+
+def _grounded(answer: str, context: dict[str, Any]) -> tuple[bool, list[float]]:
+    """Reject a model answer that contains a number not present in context."""
+    allowed: set[float] = set()
+    _allowed_numbers(context, allowed)
+
+    invented: list[float] = []
+    for number in _numbers_in_text(answer):
+        if not any(abs(number - candidate) <= 1e-9 for candidate in allowed):
+            invented.append(number)
+    return not invented, invented
+
+
 def _call_model(
     question: str, context: dict[str, Any], config: LlmConfig, system: str = SYSTEM_PROMPT
 ) -> str:
@@ -339,18 +416,32 @@ def _call_model(
     return body["choices"][0]["message"]["content"]
 
 
-def ask(question: str, frame: TelemetryFrame, estimate: prognosis_mod.PlantPrognosis) -> AssistantReply:
+def ask(
+    question: str,
+    frame: TelemetryFrame,
+    estimate: prognosis_mod.PlantPrognosis,
+    predictions: dict[str, Any] | None = None,
+) -> AssistantReply:
     """Answer one operator question, degrading to the rule-based narrator."""
     config = config_from_env()
     if not config.api_key:
         return fallback_reply(frame, estimate, detail="no API key configured")
 
-    context = build_context(frame, estimate)
+    context = build_context(frame, estimate, predictions)
     try:
         content = _call_model(question or "What is wrong with the turbine?", context, config)
         answer, actions = _parse_reply(content)
     except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as error:
         return fallback_reply(frame, estimate, detail=f"{type(error).__name__}: {error}")
+
+    grounded, invented = _grounded(content, context)
+    if not grounded:
+        return fallback_reply(
+            frame,
+            estimate,
+            detail="model answer introduced ungrounded numbers: "
+            + ", ".join(f"{value:g}" for value in invented),
+        )
 
     if not actions:
         actions = _fallback_actions(frame)
@@ -450,10 +541,13 @@ def build_diagnosis(
 
 
 def build_procedure_context(
-    diagnosis: dict[str, Any], procedure: procedures.Procedure
+    diagnosis: dict[str, Any],
+    procedure: procedures.Procedure,
+    predictions: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "diagnosis": diagnosis,
+        "predictions": _prediction_context(predictions),
         "procedure": {
             "title": procedure.title,
             "tools": list(procedure.tools),
@@ -539,6 +633,7 @@ def ask_procedure(
     question: str,
     frame: TelemetryFrame,
     estimate: prognosis_mod.PlantPrognosis,
+    predictions: dict[str, Any] | None = None,
 ) -> ProcedureReply:
     """Build a repair plan whose steps come from the library, not the model."""
     config = config_from_env()
@@ -547,7 +642,7 @@ def ask_procedure(
 
     diagnosis = build_diagnosis(frame, estimate)
     procedure = procedures.for_component(str(diagnosis.get("component_id", "gearbox")))
-    context = build_procedure_context(diagnosis, procedure)
+    context = build_procedure_context(diagnosis, procedure, predictions)
 
     try:
         content = _call_model(
@@ -560,6 +655,15 @@ def ask_procedure(
     except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as error:
         return fallback_procedure(
             frame, estimate, detail=f"{type(error).__name__}: {error}"
+        )
+
+    grounded, invented = _grounded(content, context)
+    if not grounded:
+        return fallback_procedure(
+            frame,
+            estimate,
+            detail="model answer introduced ungrounded numbers: "
+            + ", ".join(f"{value:g}" for value in invented),
         )
 
     worst = min(frame.components, key=lambda c: c.health, default=None)

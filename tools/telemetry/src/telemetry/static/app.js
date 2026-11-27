@@ -8,7 +8,12 @@ const state = {
   scenarios: [],
   catalog: null,
   injections: [],
+  injectionFingerprint: null,
   history: new Map(),
+  historyScenario: null,
+  historyTick: -1,
+  events: [],
+  eventIds: new Set(),
   scrubbing: false,
   loading: false,
   asking: false,
@@ -22,6 +27,8 @@ const el = {
   status: document.getElementById('status'),
   cards: document.getElementById('cards'),
   plant: document.getElementById('plant'),
+  sensorBanner: document.getElementById('sensor-banner'),
+  alerts: document.getElementById('alerts'),
   scenarios: document.getElementById('scenarios'),
   play: document.getElementById('play'),
   speed: document.getElementById('speed'),
@@ -105,13 +112,39 @@ function chip(text, className = 'tool') {
 
 // -- health cards -----------------------------------------------------------
 
-function cardHtml(component, trend) {
+function predictionLine(prediction) {
+  if (!prediction) return { text: 'Predicted: no history yet', className: 'muted' };
+  if (prediction.ttf_days && prediction.ttf_days.length === 2) {
+    const [lo, hi] = prediction.ttf_days;
+    const range = Math.abs(hi - lo) < 0.05 ? `${fmt(lo)} d` : `${fmt(lo)}–${fmt(hi)} d`;
+    const confidence = prediction.confidence == null
+      ? ''
+      : ` · ${Math.round(Number(prediction.confidence) * 100)}% heuristic confidence`;
+    return { text: `Predicted: ${range} to critical${confidence}`, className: 'warn' };
+  }
+  if (prediction.status === 'event') {
+    return { text: 'Predicted: active event', className: 'bad' };
+  }
+  if (prediction.band === 'critical') {
+    return { text: 'Predicted: at the critical threshold', className: 'bad' };
+  }
+  if (prediction.status === 'insufficient_data') {
+    return { text: 'Predicted: collecting history', className: 'muted' };
+  }
+  return { text: 'Predicted: stable', className: 'ok' };
+}
+
+function cardHtml(component, trend, prediction) {
   const health = Number(component.health);
   const color = bandClass(health);
   const factor = (component.factors || []).find((item) => item.severity > 0);
   const why = factor
     ? `${signalLabel(factor.signal)} ${fmt(factor.value)} ${factor.unit || ''} (warn ${fmt(factor.warn)})`
     : 'all signals within envelope';
+  const predictionText = predictionLine(prediction);
+  const explanation = prediction && prediction.top_contributors && prediction.top_contributors[0]
+    ? prediction.top_contributors[0].text
+    : '';
 
   let eta = '—';
   if (trend) {
@@ -134,11 +167,14 @@ function cardHtml(component, trend) {
         <span class="eta">${eta}</span>
       </div>
       <div class="why">${why}</div>
+      <div class="prediction ${predictionText.className}">${predictionText.text}</div>
+      ${explanation ? `<div class="explain">${explanation}</div>` : ''}
+      <div class="explain">Predictor health and projected range</div>
       <canvas id="spark-${component.id}" width="520" height="72"></canvas>
     </article>`;
 }
 
-function drawSpark(id) {
+function drawSpark(id, prediction) {
   const canvas = document.getElementById(`spark-${id}`);
   if (!canvas) return;
 
@@ -146,6 +182,7 @@ function drawSpark(id) {
   const width = canvas.width;
   const height = canvas.height;
   const pad = 6;
+  const split = prediction && prediction.ttf_days ? width * 0.78 : width;
   ctx.clearRect(0, 0, width, height);
 
   // Envelope bands, so a flat line still reads against the thresholds.
@@ -164,40 +201,154 @@ function drawSpark(id) {
   const points = state.history.get(id) || [];
   if (points.length === 0) return;
 
-  const color = points[points.length - 1] >= HEALTH_OK
+  const color = points[points.length - 1].health >= HEALTH_OK
     ? '#3ddc84'
-    : points[points.length - 1] >= HEALTH_WARN ? '#ffb020' : '#ff5257';
+    : points[points.length - 1].health >= HEALTH_WARN ? '#ffb020' : '#ff5257';
 
   ctx.strokeStyle = color;
   ctx.lineWidth = 2.5;
   ctx.lineJoin = 'round';
   ctx.beginPath();
 
-  points.forEach((value, index) => {
-    const x = points.length === 1 ? width / 2 : (index / (points.length - 1)) * width;
-    const y = pad + (1 - value) * (height - pad * 2);
+  const firstTime = points[0].time;
+  const lastTime = points[points.length - 1].time;
+  points.forEach((point, index) => {
+    const x = lastTime === firstTime ? split : ((point.time - firstTime) / (lastTime - firstTime)) * split;
+    const y = pad + (1 - point.health) * (height - pad * 2);
     if (index === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
   ctx.stroke();
+
+  // The interval endpoints are the two forecast crossing times. History and
+  // forecast have separate horizontal scales; the exact range is on the card.
+  if (prediction && prediction.ttf_days && points.length > 0) {
+    const last = points[points.length - 1].health;
+    const startX = split;
+    const startY = pad + (1 - last) * (height - pad * 2);
+    const [lo, hi] = prediction.ttf_days.map(Number);
+    const earlyX = startX + (width - pad - startX) * (hi > 0 ? lo / hi : 0);
+    const lateX = width - pad;
+    const endY = pad + (1 - 0.45) * (height - pad * 2);
+
+    ctx.fillStyle = 'rgba(255, 82, 87, 0.14)';
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(earlyX, endY);
+    ctx.lineTo(lateX, endY);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.setLineDash([5, 6]);
+    ctx.strokeStyle = '#ff5257';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo((earlyX + lateX) / 2, endY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+function renderSensorFaults(predictions) {
+  if (!el.sensorBanner) return;
+  const faults = [];
+  for (const [componentId, prediction] of Object.entries(predictions || {})) {
+    for (const signal of prediction.sensor_faults || []) {
+      faults.push(`${pretty(componentId)} · ${signalLabel(signal)}`);
+    }
+  }
+  el.sensorBanner.hidden = faults.length === 0;
+  el.sensorBanner.textContent = faults.length
+    ? `Suspected sensor fault — ${[...new Set(faults)].join(', ')}. Suspect signals are excluded from health fusion.`
+    : '';
+}
+
+function renderAlerts() {
+  if (!el.alerts) return;
+  if (!state.events.length) {
+    el.alerts.innerHTML = '<span class="hint">No events yet — the predictor is listening.</span>';
+    return;
+  }
+  el.alerts.innerHTML = state.events
+    .slice(0, 8)
+    .map((event) => {
+      const badge = String(event.status || 'event');
+      const time = Number(event.asset_time || 0).toFixed(1);
+      return `
+        <div class="alert-item">
+          <div class="alert-head">
+            <span class="chip ${badge === 'failed' ? 'bad' : badge === 'imminent' ? 'warn' : 'tool'}">${badge}</span>
+            <span class="alert-time">t=${time} h</span>
+          </div>
+          <div class="alert-body">${event.message || event.type}</div>
+        </div>`;
+    })
+    .join('');
+}
+
+function addEvent(event) {
+  const id = event.event_id || `${event.type}:${event.asset_time}:${event.message}`;
+  if (state.eventIds.has(id)) return;
+  state.eventIds.add(id);
+  state.events.unshift(event);
+  if (state.events.length > 40) state.events.pop();
+  renderAlerts();
+}
+
+async function loadEventLog() {
+  try {
+    const response = await fetch('/api/events/log', { cache: 'no-store' });
+    if (!response.ok) return;
+    const payload = await response.json();
+    state.events = [];
+    state.eventIds = new Set();
+    for (const event of payload.events || []) addEvent(event);
+    renderAlerts();
+  } catch (_) {
+    // The SSE stream still delivers live events when the log is unavailable.
+  }
+}
+
+function connectEvents() {
+  if (typeof EventSource === 'undefined') return;
+  const stream = new EventSource('/api/events');
+  stream.onmessage = (message) => {
+    try {
+      addEvent(JSON.parse(message.data));
+    } catch (_) {
+      // Ignore malformed frames rather than tearing down the stream.
+    }
+  };
 }
 
 function renderHealth(payload) {
-  const { session, frame, prognosis } = payload;
+  const { session, frame, prognosis, predictions } = payload;
 
   const trends = new Map(((prognosis && prognosis.components) || []).map((item) => [item.component_id, item]));
+  const predicted = predictions || {};
 
+  if (state.historyScenario !== frame.scenario || frame.tick < state.historyTick) {
+    state.history.clear();
+    if (state.historyScenario !== null) loadEventLog();
+  }
+  const newTick = frame.tick !== state.historyTick || state.historyScenario !== frame.scenario;
+  state.historyScenario = frame.scenario;
+  state.historyTick = frame.tick;
   for (const component of frame.components) {
+    if (!newTick || !predicted[component.id]) continue;
     const history = state.history.get(component.id) || [];
-    history.push(component.health);
+    history.push({ time: frame.asset_time_h, health: Number(predicted[component.id].health) });
     if (history.length > HISTORY_POINTS) history.shift();
     state.history.set(component.id, history);
   }
 
   el.cards.innerHTML = frame.components
-    .map((component) => cardHtml(component, trends.get(component.id)))
+    .map((component) => cardHtml(component, trends.get(component.id), predicted[component.id]))
     .join('');
-  for (const component of frame.components) drawSpark(component.id);
+  for (const component of frame.components) drawSpark(component.id, predicted[component.id]);
+
+  renderSensorFaults(predicted);
 
   const worst = frame.components.reduce((a, b) => (a.health <= b.health ? a : b));
   const critical = frame.components.filter((component) => component.health < HEALTH_WARN).length;
@@ -319,7 +470,15 @@ async function loadInjections() {
     const response = await fetch('/api/inject', { cache: 'no-store' });
     if (!response.ok) return;
     const payload = await response.json();
-    state.injections = payload.injections || [];
+    const injections = payload.injections || [];
+    const fingerprint = JSON.stringify(injections);
+    if (state.injectionFingerprint !== null && fingerprint !== state.injectionFingerprint) {
+      state.history.clear();
+      state.historyTick = -1;
+      loadEventLog();
+    }
+    state.injectionFingerprint = fingerprint;
+    state.injections = injections;
     renderActiveInjections();
   } catch (_) {
     // Keep last known injection list when polling offline.
@@ -399,6 +558,7 @@ async function applyPreset(presetId) {
       });
     }
     state.history.clear();
+    await loadEventLog();
     await loadInjections();
     await load();
   } catch (error) {
@@ -761,6 +921,7 @@ if (el.labReset) {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       state.history.clear();
+    await loadEventLog();
       await loadInjections();
       await load();
     } catch (error) {
@@ -802,6 +963,7 @@ if (el.labLoadBtn && el.labLoadFile) {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       state.history.clear();
+    await loadEventLog();
       await loadInjections();
       await load();
     } catch (error) {
@@ -826,6 +988,8 @@ if (askParam) {
 loadScenarios();
 loadCatalog();
 loadInjections();
+loadEventLog();
+connectEvents();
 load();
 setInterval(() => {
   load();

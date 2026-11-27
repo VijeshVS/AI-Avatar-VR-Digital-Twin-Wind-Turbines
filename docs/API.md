@@ -33,7 +33,7 @@ Rules:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/state` | One snapshot: `session`, `frame`, `prognosis` — poll this |
+| `GET` | `/api/state` | One snapshot: `session`, `frame`, legacy `prognosis`, Phase-2 `predictions` — poll this |
 | `GET` | `/api/session` | Session only |
 | `POST` | `/api/session` | Control the clock, scenario and focus |
 | `GET` | `/api/telemetry?t=&scenario=&turbine_id=` | One frame; `t` omitted → session clock |
@@ -50,6 +50,9 @@ Rules:
 | `POST` | `/api/inject/reset` | Clear all injections and return to `nominal` |
 | `GET` | `/api/inject/export` | Export active scenario and injections as JSON |
 | `POST` | `/api/inject/import` | Validate and load an exported scenario JSON |
+| `GET` | `/api/predictions?turbine_id=` | Latest Phase-2 component health and failure prognosis |
+| `GET` | `/api/events` | Server-Sent Events stream of new predictor alerts |
+| `GET` | `/api/events/log?turbine_id=` | Event history for the latest replay of a turbine |
 
 `turbine_id` defaults to `"T1"`, so every pre-fleet client keeps working.
 
@@ -106,6 +109,7 @@ Each sample carries:
 | `signals[].value` | Measured value, the only thing the health engine sees |
 | `signals[].true` | True machine value, before sensor corruption |
 | `signals[].measured` | Sensor-reported value (equal to `true` for healthy sensors) |
+| `predictions[]` | Optional Phase-2 predictor snapshot when requested through `/api/telemetry` |
 
 The simulator is layered:
 
@@ -128,7 +132,8 @@ jumping directly to an hour returns byte-identical data.
                  "speed": 1.0, "focus": null, "focus_seq": 0 },
   "frame":     { "schema_version": 1, "turbine_id": "T1", "tick": 480,
                  "asset_time_h": 480.0, "elapsed_s": 60.0, "...": "..." },
-  "prognosis": { "t": 60.0, "worst": "gearbox", "components": [ "...": "..." ] }
+  "prognosis": { "t": 60.0, "worst": "gearbox", "components": [ "...": "..." ] },
+  "predictions": { "gearbox": { "health": 0.8, "status": "degrading", "band": "8-30 d" } }
 }
 ```
 
@@ -136,11 +141,54 @@ jumping directly to an hour returns byte-identical data.
 instant, so the page cannot show a clock and a health score from different
 moments.
 
+`prognosis` is the pre-existing health trend. `predictions` is the Phase-2
+raw-measurement predictor and is keyed by component id. A component prognosis
+includes `health`, `state`, `status`, optional `ttf_days: [low, high]`, a `band`,
+heuristic `confidence`, explainability contributors, active events, and
+suspected sensor faults. The frame endpoint returns the same component
+prognoses as an array in `predictions`, which Unity can parse with `JsonUtility`.
+
+The predictor never reads injected/true values: it consumes `sample.measured`.
+It replays chronologically on the 1-asset-hour grid after a seek, scenario
+switch, or injection change. The runtime clock also advances the default
+turbine predictor when no client is polling, so `/api/predictions` stays current.
+
+### Baseline commissioning
+
+Baseline coefficients and residual spreads are checked in at
+`tools/telemetry/src/telemetry/predictor/baseline_T1.json`. Recreate them from
+14 nominal asset-days with:
+
+```bash
+cd tools/telemetry
+uv run python scripts/calibrate_baseline.py
+```
+
+The simulator's `power_ratio` is nominally constant, so thermal baselines use
+measured rotor-speed load fraction rather than fitting a singular power-ratio
+feature. The JSON records the fitted input range; residual models are disabled
+outside that commissioned range. EWMA spread is calibrated from nominal residual
+sequences because the simulator's band-limited noise is autocorrelated; a
+conservative residual floor prevents this synthetic commissioning set from
+overstating statistical certainty.
+
+### Predictor and alert requests
+
+```bash
+curl http://127.0.0.1:8000/api/predictions
+curl http://127.0.0.1:8000/api/events/log
+curl -N http://127.0.0.1:8000/api/events
+```
+
+The SSE endpoint emits `data: {json}` records and keepalive comments. Events
+carry `event_id`, `component`, `type`, `severity`, `asset_time`, `message`,
+`evidence`, and `status` (`shock`, `imminent`, or `failed`).
+
 ## Tests
 
 ```bash
 cd tools/telemetry
-uv run pytest                    # 122 tests, no network
+uv run pytest                    # includes predictor math, replay and API tests
 uv run uvicorn telemetry.main:app --port 8000 --reload
 ```
 

@@ -23,6 +23,7 @@ namespace Vrar.Telemetry
         public EnvironmentPayload environment;
         public SignalPayload[] signals;
         public ComponentPayload[] components;
+        public PredictionPayload[] predictions;
 
         /// <summary>The turbine id, falling back to the service's default for older payloads.</summary>
         public string TurbineIdOr(string fallback = "T1")
@@ -60,6 +61,19 @@ namespace Vrar.Telemetry
                 if (component != null && component.id == id)
                 {
                     return component;
+                }
+            }
+
+            return null;
+        }
+
+        public PredictionPayload Prediction(string id)
+        {
+            foreach (PredictionPayload prediction in predictions ?? Array.Empty<PredictionPayload>())
+            {
+                if (prediction != null && prediction.component == id)
+                {
+                    return prediction;
                 }
             }
 
@@ -139,5 +153,33 @@ namespace Vrar.Telemetry
         public float severity;
         public float weight;
         public float contribution;
+    }
+
+    [Serializable]
+    public class PredictionPayload
+    {
+        public string component;
+        public string status;
+        public string band;
+        public float[] ttf_days;
+        public PredictionEventPayload[] active_events;
+
+        public string DisplayText()
+        {
+            if (ttf_days != null && ttf_days.Length == 2)
+                return $"Predicted: {ttf_days[0]:0.0}–{ttf_days[1]:0.0} d";
+            if (status == "event") return "Predicted: active event";
+            if (band == "critical") return "Predicted: critical";
+            if (status == "insufficient_data") return "Predicted: collecting history";
+            return "Predicted: stable";
+        }
+    }
+
+    [Serializable]
+    public class PredictionEventPayload
+    {
+        public string event_id;
+        public string message;
+        public string status;
     }
 }
