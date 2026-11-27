@@ -9,9 +9,9 @@ perceptual cues and what the HUD prints as a reason string.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from .models import COMPONENT_LABELS, ComponentHealth, Factor
+from .models import COMPONENT_LABELS, ComponentHealth, Factor, Sample
 
 WEIGHT_CRITICAL_ONLY = 0.35  # relative weight kept for healthy contributors
 
@@ -48,6 +48,10 @@ COMPONENT_RULES: dict[str, tuple[Rule, ...]] = {
         Rule("nacelle_vibration_mm_s", "mm/s", 2.2, 5.2, 1.0),
         Rule("gearbox_temp_rise_c", "degC", 6.0, 15.0, 0.45),
         Rule("wind_speed_ms", "m/s", 18.0, 24.0, 0.25),
+        # Dedicated main-bearing channels. The built-in scenarios do not raise
+        # them yet; Phase 1's bearing-wear injection does.
+        Rule("main_bearing_temp", "degC", 70.0, 95.0, 0.8),
+        Rule("main_bearing_vibration", "mm/s", 2.2, 5.2, 0.9),
     ),
     "gearbox": (
         Rule("gearbox_vibration_mm_s", "mm/s", 3.2, 7.5, 1.0),
@@ -181,3 +185,43 @@ def dominant_reason(component: ComponentHealth) -> str:
         f"{top.signal} {top.value:.2f} {top.unit} "
         f"(warn {top.warn:.2f}, critical {top.critical:.2f})"
     )
+
+
+def score_sample(
+    sample: Sample, previous: dict[str, float] | None = None
+) -> tuple[ComponentHealth, ...]:
+    """Score a sample from *measured* values only.
+
+    The predictor never sees ``sample.true``: a stuck sensor must not be able to
+    make the health engine believe the machine failed.
+    """
+    return score_all(sample.measured, previous)
+
+
+@dataclass
+class HealthModel:
+    """Instance-scoped scorer.
+
+    Holds the previous scores used for trend reporting, so two turbines never
+    share smoothing state. Module-level functions remain available for the
+    existing tests and one-off scoring.
+    """
+
+    rules: dict[str, tuple[Rule, ...]] = field(
+        default_factory=lambda: dict(COMPONENT_RULES)
+    )
+    previous: dict[str, float] = field(default_factory=dict)
+
+    def score(self, signal_values: dict[str, float]) -> tuple[ComponentHealth, ...]:
+        components = tuple(
+            score_component(component_id, signal_values, self.previous.get(component_id))
+            for component_id in self.rules
+        )
+        self.previous = {component.id: component.health for component in components}
+        return components
+
+    def score_sample(self, sample: Sample) -> tuple[ComponentHealth, ...]:
+        return self.score(sample.measured)
+
+    def reset(self) -> None:
+        self.previous.clear()

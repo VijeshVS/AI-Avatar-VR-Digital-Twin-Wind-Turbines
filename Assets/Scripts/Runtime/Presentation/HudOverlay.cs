@@ -762,7 +762,7 @@ namespace Vrar.Presentation
             _builder.Append(_statusLine);
             if (_lastFrame != null)
             {
-                _builder.Append($"    t={_lastFrame.elapsed_s:0}s    {_lastFrame.scenario}");
+                _builder.Append($"    {_lastFrame.TurbineIdOr()}    t={_lastFrame.elapsed_s:0}s    {_lastFrame.scenario}");
             }
 
             return _builder.ToString();

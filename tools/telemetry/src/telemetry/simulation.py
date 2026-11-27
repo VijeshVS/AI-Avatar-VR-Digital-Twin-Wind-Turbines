@@ -1,19 +1,42 @@
-"""Deterministic synthetic telemetry for a single 3.6 MW class wind turbine.
+"""Layered, deterministic synthetic telemetry for a 3.6 MW class wind turbine.
 
-The generator is a closed-form function of simulation time, so any tick can be
-recomputed from scratch. That keeps the Unity client free of hidden state and
-lets the PlayMode tests replay an exact frame.
+Every engine tick flows through four stages::
 
-Physics here is illustrative, not certified: the point is to produce plausible,
+    nominal generator -> physical modifiers -> sensor-quality modifiers -> sample
+
+* The **nominal generator** is a closed-form function of time. It describes a
+  healthy machine and nothing else.
+* **Physical modifiers** change what the turbine is doing (wear, heat, icing,
+  a lightning strike). They update the *true* state.
+* **Sensor-quality modifiers** corrupt only what the sensor reports (stuck,
+  dropout, noise). They update the *measured* state and leave truth intact.
+* The resulting :class:`~telemetry.models.Sample` carries both values, plus
+  ``turbine_id`` and ``asset_time_h``.
+
+The physics is illustrative, not certified: the point is plausible,
 reproducible signals with recognisable fault signatures.
+
+Sampling is random-access. The canonical engine tick is one **asset-hour**
+(0.125 simulation seconds at the demo's eight asset-hours per second), and the
+noise helpers are seeded per ``(turbine_seed, signal, tick_index)``. Scrubbing
+backward or jumping straight to a tick therefore returns identical data.
 """
 
 from __future__ import annotations
 
+import hashlib
 import math
+import random
 from dataclasses import dataclass
+from typing import Protocol
 
-from .models import COMPONENT_LABELS, Environment, Signal
+from .models import (
+    COMPONENT_LABELS,
+    DEFAULT_TURBINE_ID,
+    Environment,
+    Sample,
+    Signal,
+)
 
 # Rotor / plant constants for the notional turbine.
 ROTOR_DIAMETER_M = 120.0
@@ -25,6 +48,13 @@ RATED_POWER_KW = 3600.0
 BLADE_PASS_PER_REV = 3
 # Gearbox oil temperature expected to sit this far above ambient at idle.
 GEARBOX_BASELINE_RISE_C = 44.0
+
+# Time compression used by the demo: one simulated second stands for eight
+# asset-hours. The canonical engine grid is one asset-hour per sample.
+ASSET_HOURS_PER_SIM_SECOND = 8.0
+SIM_SECONDS_PER_ASSET_HOUR = 1.0 / ASSET_HOURS_PER_SIM_SECOND
+
+DEFAULT_TURBINE_SEED = 1
 
 
 @dataclass(frozen=True)
@@ -95,6 +125,54 @@ SCENARIOS: dict[str, ScenarioSpec] = {
 
 def default_scenario() -> str:
     return "gearbox_degradation"
+
+
+# -- timebase ---------------------------------------------------------------
+
+
+def asset_time_hours(sim_seconds: float) -> float:
+    """Convert simulation seconds to asset-hours (the engine's clock)."""
+    return max(0.0, float(sim_seconds)) * ASSET_HOURS_PER_SIM_SECOND
+
+
+def sim_seconds_for_asset_hours(asset_hours: float) -> float:
+    """Convert asset-hours to simulation seconds."""
+    return max(0.0, float(asset_hours)) * SIM_SECONDS_PER_ASSET_HOUR
+
+
+def tick_index_at(sim_seconds: float) -> int:
+    """Nearest engine tick for a simulation time."""
+    return int(round(max(0.0, float(sim_seconds)) / SIM_SECONDS_PER_ASSET_HOUR))
+
+
+def sim_seconds_for_tick(tick: int) -> float:
+    """Simulation time of an engine tick."""
+    return max(0, int(tick)) * SIM_SECONDS_PER_ASSET_HOUR
+
+
+# -- deterministic noise ----------------------------------------------------
+
+
+def _seed_for(turbine_seed: int, signal: str, tick_index: int) -> int:
+    """Stable 64-bit seed for one (turbine, signal, tick) triple."""
+    key = f"{int(turbine_seed)}:{signal}:{int(tick_index)}".encode("utf-8")
+    return int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "big")
+
+
+def rng_for(turbine_seed: int, signal: str, tick_index: int) -> random.Random:
+    """A fresh RNG for one signal at one tick.
+
+    A new instance per draw is what makes sampling random-access: there is no
+    stream position to rewind when the client scrubs.
+    """
+    return random.Random(_seed_for(turbine_seed, signal, tick_index))
+
+
+def deterministic_noise(
+    turbine_seed: int, signal: str, tick_index: int, scale: float = 1.0
+) -> float:
+    """Uniform noise in ``[-scale, scale]``, reproducible for a tick."""
+    return scale * rng_for(turbine_seed, signal, tick_index).uniform(-1.0, 1.0)
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -182,101 +260,391 @@ def rotor_angle_rad(t: float) -> float:
     return angle % (2.0 * math.pi)
 
 
-def build_signals(t: float, scenario_id: str) -> tuple[Signal, ...]:
-    """Return the full signal set for time ``t`` under ``scenario_id``."""
-    spec = SCENARIOS.get(scenario_id, SCENARIOS[default_scenario()])
-    onset = spec.onset_s if not spec.healthy_asset else float("inf")
-    progress = _smoothstep(onset, onset + 90.0, t) if not spec.healthy_asset else 0.0
+# -- modifiers --------------------------------------------------------------
 
+
+@dataclass(frozen=True)
+class ModifierContext:
+    """Read-only context handed to every modifier."""
+
+    scenario: str
+    t: float
+    asset_time_h: float
+    turbine_seed: int = DEFAULT_TURBINE_SEED
+    onset_s: float = 0.0
+    progress: float = 0.0
+
+
+class Modifier(Protocol):
+    """One pipeline stage.
+
+    ``apply`` receives the sample, the asset time in hours and the context, and
+    returns the next sample. Modifiers are pure: the same inputs always produce
+    the same output, which keeps seeking and replay cheap.
+    """
+
+    def apply(self, sample: Sample, asset_time: float, ctx: ModifierContext) -> Sample:
+        ...
+
+
+@dataclass(frozen=True)
+class ScenarioFaultModifier:
+    """Physical effect of one named scenario.
+
+    This is the Phase 0 home for the fault programmes that used to be baked into
+    the generator. Phase 1 replaces it with a data-driven injection catalog; the
+    pipeline does not change.
+    """
+
+    scenario: str
+
+    def apply(self, sample: Sample, asset_time: float, ctx: ModifierContext) -> Sample:
+        true = dict(sample.true)
+        meta = dict(sample.meta)
+        heat = ctx.progress
+
+        if self.scenario == "gearbox_degradation":
+            true["gearbox_temp_c"] += 18.0 * heat
+            true["gearbox_temp_rise_c"] = true["gearbox_temp_c"] - meta["expected_gearbox_temp"]
+            true["gearbox_vibration_mm_s"] += 4.4 * heat
+            true["nacelle_vibration_mm_s"] += 0.9 * heat
+            meta["derate"] -= 0.05 * heat
+        elif self.scenario == "generator_overheat":
+            true["generator_winding_temp_c"] += 30.0 * heat
+            meta["derate"] -= 0.22 * heat
+            if ctx.progress > 0.35:
+                true["converter_faults"] = (
+                    1.0 if int((ctx.t - ctx.onset_s) / 6.0) % 2 == 0 else 0.0
+                )
+        elif self.scenario == "blade_imbalance":
+            imbalance = heat
+            true["rotor_imbalance_index"] = imbalance
+            angle = meta["rotor_angle_rad"]
+            if imbalance > 0.0:
+                true["nacelle_vibration_mm_s"] += 3.0 * imbalance * abs(math.sin(angle))
+                true["rotor_rpm"] = _clamp(
+                    meta["rpm_base"] + 0.35 * imbalance * math.sin(angle),
+                    0.0,
+                    RATED_RPM * 1.2,
+                )
+                true["yaw_deg"] += 4.0 * imbalance * math.sin(0.5 * angle)
+        elif self.scenario == "pitch_fault":
+            true["pitch_angle_deg"] += 6.0 * heat
+            true["pitch_position_error_deg"] += 5.0 * heat
+
+        _recompute_power(true, meta)
+        updated = sample.with_true(true)
+        return updated.with_meta(meta)
+
+
+@dataclass(frozen=True)
+class SensorNoiseModifier:
+    """Add seeded noise to one reported signal, leaving truth untouched."""
+
+    signal: str
+    scale: float
+
+    def apply(self, sample: Sample, asset_time: float, ctx: ModifierContext) -> Sample:
+        if self.signal not in sample.measured:
+            return sample
+        noise = deterministic_noise(ctx.turbine_seed, self.signal, sample.tick, self.scale)
+        return sample.with_measured({self.signal: sample.measured[self.signal] + noise})
+
+
+@dataclass(frozen=True)
+class StuckSensorModifier:
+    """Report a held value for one signal; the machine keeps changing underneath."""
+
+    signal: str
+    held_value: float | None = None
+
+    def apply(self, sample: Sample, asset_time: float, ctx: ModifierContext) -> Sample:
+        if self.signal not in sample.measured:
+            return sample
+        value = sample.true[self.signal] if self.held_value is None else self.held_value
+        return sample.with_measured({self.signal: value})
+
+
+@dataclass(frozen=True)
+class DropoutModifier:
+    """Report zero for one signal, the wire model's stand-in for a null sample."""
+
+    signal: str
+
+    def apply(self, sample: Sample, asset_time: float, ctx: ModifierContext) -> Sample:
+        if self.signal not in sample.measured:
+            return sample
+        return sample.with_measured({self.signal: 0.0})
+
+
+# Signal ids and units, in wire order. New signals are appended so older clients
+# keep receiving the fields they already know.
+UNITS: dict[str, str] = {
+    "wind_speed_ms": "m/s",
+    "ambient_temp_c": "degC",
+    "rotor_rpm": "rpm",
+    "active_power_kw": "kW",
+    "power_ratio": "0-1",
+    "yaw_deg": "deg",
+    "gearbox_temp_c": "degC",
+    "gearbox_temp_rise_c": "degC",
+    "gearbox_vibration_mm_s": "mm/s",
+    "nacelle_vibration_mm_s": "mm/s",
+    "generator_winding_temp_c": "degC",
+    "converter_faults": "count",
+    "pitch_angle_deg": "deg",
+    "pitch_position_error_deg": "deg",
+    "blade_pass_hz": "Hz",
+    "rotor_angle_deg": "deg",
+    "rotor_imbalance_index": "0-1",
+    "main_bearing_temp": "degC",
+    "main_bearing_vibration": "mm/s",
+}
+
+
+def _nominal_values(t: float) -> tuple[dict[str, float], dict[str, float]]:
+    """Healthy machine state at time ``t`` plus the internal values modifiers need."""
     wind = wind_speed(t)
     rpm_base = rotor_rpm(wind)
     ambient = 9.0 + 4.0 * _noise(t, 11.0, 1.0) + 0.02 * t
 
-    # --- gearbox degradation -------------------------------------------------
-    gearbox_heat = 0.0
-    if scenario_id == "gearbox_degradation":
-        gearbox_heat = progress
+    load_fraction = _clamp(rpm_base / RATED_RPM, 0.0, 1.0)
     # Oil temperature rides on load: baseline rise over ambient at idle plus a
     # load term. Health is judged on the rise above that baseline, not on
     # absolute degrees, so a cold morning is not scored as a fault.
-    load_fraction = _clamp(rpm_base / RATED_RPM, 0.0, 1.0)
     expected_gearbox_temp = ambient + GEARBOX_BASELINE_RISE_C + 18.0 * load_fraction
-    gearbox_temp = expected_gearbox_temp + _noise(t, 5.0, 0.4) + 18.0 * gearbox_heat
+    gearbox_temp = expected_gearbox_temp + _noise(t, 5.0, 0.4)
     gearbox_temp_rise = gearbox_temp - expected_gearbox_temp
 
     gearbox_vib = 1.4 + 1.1 * _clamp(rpm_base / RATED_RPM, 0.0, 1.0)
     gearbox_vib += _noise(t, 7.0, 0.12)
-    gearbox_vib += 4.4 * gearbox_heat
 
-    # --- generator cooling loss ----------------------------------------------
-    gen_heat = progress if scenario_id == "generator_overheat" else 0.0
     generator_temp = 61.0 + 34.0 * _clamp(rpm_base / RATED_RPM, 0.0, 1.0)
     generator_temp += _noise(t, 13.0, 0.6)
-    generator_temp += 30.0 * gen_heat
 
-    converter_faults = 0.0
-    derate = 1.0 - 0.22 * gen_heat - 0.05 * gearbox_heat
-    if scenario_id == "generator_overheat" and progress > 0.35:
-        converter_faults = 1.0 if int((t - onset) / 6.0) % 2 == 0 else 0.0
-
-    # --- rotor imbalance ------------------------------------------------------
-    imbalance = progress if scenario_id == "blade_imbalance" else 0.0
     blade_pass_hz = BLADE_PASS_PER_REV * rpm_base / 60.0
     rotor_angle = rotor_angle_rad(t)
-    imbalance_phase = rotor_angle
-
-    imbalance_vib = 0.0
-    if imbalance > 0.0:
-        imbalance_vib = 3.0 * imbalance * abs(math.sin(imbalance_phase))
 
     nacelle_vib = 0.6 + 0.9 * _clamp(rpm_base / RATED_RPM, 0.0, 1.0)
     nacelle_vib += _noise(t, 17.0, 0.1)
-    nacelle_vib += imbalance_vib
-    nacelle_vib += 0.9 * gearbox_heat
 
-    rotor_speed_dev = 0.0
     yaw = 187.0 + 6.0 * _noise(t, 19.0, 0.5)
-    if imbalance > 0.0:
-        rotor_speed_dev = 0.35 * imbalance * math.sin(imbalance_phase)
-        yaw += 4.0 * imbalance * math.sin(0.5 * imbalance_phase)
 
-    # --- pitch fault ----------------------------------------------------------
-    pitch_heat = progress if scenario_id == "pitch_fault" else 0.0
     pitch_target = -0.5
     pitch_angle = pitch_target + 0.8 * _noise(t, 23.0, 0.2)
     pitch_error = 0.25 + _noise(t, 29.0, 0.15)
-    if pitch_heat > 0.0:
-        pitch_angle += 6.0 * pitch_heat
-        pitch_error += 5.0 * pitch_heat
 
-    # --- power ---------------------------------------------------------------
     pitch_power_factor = 1.0 - 0.0045 * max(0.0, pitch_angle - pitch_target)
     expected_power_kw = active_power(wind, rpm_base, 1.0)
-    power_kw = expected_power_kw * derate * pitch_power_factor
-    # Fraction of the power the current wind could produce. Health rules compare
-    # against this, not against rated power, so a calm morning is not a fault.
+    power_kw = expected_power_kw * 1.0 * pitch_power_factor
     power_ratio = power_kw / expected_power_kw if expected_power_kw > 1.0 else 1.0
 
-    signals = (
-        Signal("wind_speed_ms", wind, "m/s"),
-        Signal("ambient_temp_c", ambient, "degC"),
-        Signal("rotor_rpm", _clamp(rpm_base + rotor_speed_dev, 0.0, RATED_RPM * 1.2), "rpm"),
-        Signal("active_power_kw", power_kw, "kW"),
-        Signal("power_ratio", power_ratio, "0-1"),
-        Signal("yaw_deg", yaw, "deg"),
-        Signal("gearbox_temp_c", gearbox_temp, "degC"),
-        Signal("gearbox_temp_rise_c", gearbox_temp_rise, "degC"),
-        Signal("gearbox_vibration_mm_s", gearbox_vib, "mm/s"),
-        Signal("nacelle_vibration_mm_s", nacelle_vib, "mm/s"),
-        Signal("generator_winding_temp_c", generator_temp, "degC"),
-        Signal("converter_faults", converter_faults, "count"),
-        Signal("pitch_angle_deg", pitch_angle, "deg"),
-        Signal("pitch_position_error_deg", pitch_error, "deg"),
-        Signal("blade_pass_hz", blade_pass_hz, "Hz"),
-        Signal("rotor_angle_deg", math.degrees(rotor_angle), "deg"),
-        Signal("rotor_imbalance_index", imbalance, "0-1"),
+    # The main bearing has its own sensors now: Phase 1's bearing-wear injection
+    # needs a temperature and a vibration channel to act on.
+    main_bearing_temp = ambient + 12.0 + 9.0 * load_fraction + _noise(t, 31.0, 0.35)
+    main_bearing_vib = 1.1 + 0.8 * load_fraction + _noise(t, 37.0, 0.08)
+
+    true = {
+        "wind_speed_ms": wind,
+        "ambient_temp_c": ambient,
+        "rotor_rpm": _clamp(rpm_base + 0.0, 0.0, RATED_RPM * 1.2),
+        "active_power_kw": power_kw,
+        "power_ratio": power_ratio,
+        "yaw_deg": yaw,
+        "gearbox_temp_c": gearbox_temp,
+        "gearbox_temp_rise_c": gearbox_temp_rise,
+        "gearbox_vibration_mm_s": gearbox_vib,
+        "nacelle_vibration_mm_s": nacelle_vib,
+        "generator_winding_temp_c": generator_temp,
+        "converter_faults": 0.0,
+        "pitch_angle_deg": pitch_angle,
+        "pitch_position_error_deg": pitch_error,
+        "blade_pass_hz": blade_pass_hz,
+        "rotor_angle_deg": math.degrees(rotor_angle),
+        "rotor_imbalance_index": 0.0,
+        "main_bearing_temp": main_bearing_temp,
+        "main_bearing_vibration": main_bearing_vib,
+    }
+    meta = {
+        "load_fraction": load_fraction,
+        "expected_gearbox_temp": expected_gearbox_temp,
+        "expected_power_kw": expected_power_kw,
+        "pitch_target": pitch_target,
+        "derate": 1.0,
+        "rpm_base": rpm_base,
+        "rotor_angle_rad": rotor_angle,
+    }
+    return true, meta
+
+
+def _recompute_power(true: dict[str, float], meta: dict[str, float]) -> None:
+    """Apply the current derate and pitch attitude to active power.
+
+    Called after physical modifiers, because a pitch fault changes the
+    aerodynamic efficiency as well as the reported angle.
+    """
+    pitch_target = meta["pitch_target"]
+    pitch_angle = true["pitch_angle_deg"]
+    pitch_power_factor = 1.0 - 0.0045 * max(0.0, pitch_angle - pitch_target)
+    expected = meta["expected_power_kw"]
+    power_kw = expected * meta["derate"] * pitch_power_factor
+    true["active_power_kw"] = power_kw
+    true["power_ratio"] = power_kw / expected if expected > 1.0 else 1.0
+
+
+def scenario_progress(t: float, spec: ScenarioSpec) -> float:
+    """0..1 fault envelope for a named scenario."""
+    if spec.healthy_asset:
+        return 0.0
+    return _smoothstep(spec.onset_s, spec.onset_s + 90.0, t)
+
+
+def physical_modifiers(scenario: str) -> list[Modifier]:
+    """Physical stages for a scenario. Nominal returns an empty list."""
+    spec = SCENARIOS.get(scenario)
+    if spec is None or spec.healthy_asset:
+        return []
+    return [ScenarioFaultModifier(spec.id)]
+
+
+def sensor_modifiers(scenario: str) -> list[Modifier]:
+    """Sensor-quality stages for a scenario.
+
+    The built-in scenarios are sensor-healthy, so this is deliberately empty.
+    Phase 1 appends stuck/dropout/noise modifiers here or to the active
+    injection set; the pipeline already handles them.
+    """
+    return []
+
+
+def build_sample(
+    t: float,
+    scenario: str | None = None,
+    turbine_id: str = DEFAULT_TURBINE_ID,
+    turbine_seed: int = DEFAULT_TURBINE_SEED,
+    modifiers: list[Modifier] | None = None,
+    tick: int | None = None,
+) -> Sample:
+    """Run one tick through the full pipeline.
+
+    ``modifiers=None`` uses the scenario's physical and sensor stages.
+    Passing an explicit list (including ``[]``) bypasses the scenario defaults,
+    which is what makes the nominal generator directly testable.
+    """
+    scenario_id = scenario or default_scenario()
+    spec = SCENARIOS.get(scenario_id, SCENARIOS[default_scenario()])
+    scenario_id = spec.id
+
+    t = max(0.0, float(t))
+    tick_index = tick_index_at(t) if tick is None else max(0, int(tick))
+
+    true, meta = _nominal_values(t)
+    sample = Sample(
+        turbine_id=turbine_id or DEFAULT_TURBINE_ID,
+        tick=tick_index,
+        asset_time_h=asset_time_hours(t),
+        elapsed_s=t,
+        scenario=scenario_id,
+        true=true,
+        measured=dict(true),
+        units=UNITS,
+        meta=meta,
     )
-    return signals
+
+    ctx = ModifierContext(
+        scenario=scenario_id,
+        t=t,
+        asset_time_h=sample.asset_time_h,
+        turbine_seed=turbine_seed,
+        onset_s=spec.onset_s,
+        progress=scenario_progress(t, spec),
+    )
+
+    pipeline = (
+        physical_modifiers(scenario_id) + sensor_modifiers(scenario_id)
+        if modifiers is None
+        else list(modifiers)
+    )
+    for modifier in pipeline:
+        sample = modifier.apply(sample, sample.asset_time_h, ctx)
+    return sample
+
+
+def sample_at_tick(
+    tick: int,
+    scenario: str | None = None,
+    turbine_id: str = DEFAULT_TURBINE_ID,
+    turbine_seed: int = DEFAULT_TURBINE_SEED,
+    modifiers: list[Modifier] | None = None,
+) -> Sample:
+    """Canonical random-access entry point: one sample per asset-hour tick."""
+    tick = max(0, int(tick))
+    return build_sample(
+        sim_seconds_for_tick(tick),
+        scenario,
+        turbine_id=turbine_id,
+        turbine_seed=turbine_seed,
+        modifiers=modifiers,
+        tick=tick,
+    )
+
+
+def sample_at(
+    sim_seconds: float,
+    scenario: str | None = None,
+    turbine_id: str = DEFAULT_TURBINE_ID,
+    turbine_seed: int = DEFAULT_TURBINE_SEED,
+    modifiers: list[Modifier] | None = None,
+) -> Sample:
+    """Sample the tick nearest to ``sim_seconds``."""
+    return sample_at_tick(
+        tick_index_at(sim_seconds),
+        scenario,
+        turbine_id=turbine_id,
+        turbine_seed=turbine_seed,
+        modifiers=modifiers,
+    )
+
+
+# Backwards-compatible aliases: existing callers and tests use these names.
+def simulate(
+    t: float,
+    scenario: str | None = None,
+    turbine_id: str = DEFAULT_TURBINE_ID,
+    modifiers: list[Modifier] | None = None,
+    turbine_seed: int = DEFAULT_TURBINE_SEED,
+) -> Sample:
+    return build_sample(
+        t,
+        scenario,
+        turbine_id=turbine_id,
+        turbine_seed=turbine_seed,
+        modifiers=modifiers,
+    )
+
+
+def nominal_signals(t: float) -> tuple[Signal, ...]:
+    """Healthy machine only: no scenario, no sensor problems."""
+    sample = build_sample(t, "nominal", modifiers=[])
+    return tuple(Signal(s.id, s.measured_value, s.unit) for s in sample.signals)
+
+
+def nominal_sample(
+    t: float, turbine_id: str = DEFAULT_TURBINE_ID
+) -> Sample:
+    """Healthy machine state at ``t``, with no fault or sensor stages."""
+    return build_sample(t, "nominal", turbine_id=turbine_id, modifiers=[])
+
+
+def build_signals(t: float, scenario_id: str) -> tuple[Signal, ...]:
+    """Return the measured signal set for time ``t`` under ``scenario_id``.
+
+    This is the compatibility surface used by the health tests and the old
+    prognosis code. New code should use :func:`sample_at_tick` and read
+    ``sample.true`` / ``sample.measured``.
+    """
+    sample = build_sample(t, scenario_id)
+    return tuple(Signal(s.id, s.measured_value, s.unit) for s in sample.signals)
 
 
 def environment_from(signals: dict[str, float]) -> Environment:

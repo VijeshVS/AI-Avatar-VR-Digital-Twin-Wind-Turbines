@@ -66,6 +66,27 @@ def test_telemetry_frame_is_unity_parseable() -> None:
             }
 
 
+def test_frame_carries_turbine_identity_and_true_vs_measured() -> None:
+    payload = client.get(
+        "/api/telemetry", params={"t": 40.0, "turbine_id": "T3"}
+    ).json()
+
+    assert payload["turbine_id"] == "T3"
+    assert payload["tick"] == 320
+    assert payload["asset_time_h"] == 320.0
+
+    signal = next(s for s in payload["signals"] if s["id"] == "gearbox_temp_c")
+    assert signal["true"] == signal["measured"] == signal["value"]
+
+
+def test_frame_snaps_to_the_one_asset_hour_grid() -> None:
+    payload = client.get("/api/telemetry", params={"t": 40.03}).json()
+
+    assert payload["elapsed_s"] == 40.0
+    assert payload["tick"] == 320
+    assert payload["asset_time_h"] == 320.0
+
+
 def test_telemetry_is_reproducible_for_the_same_time() -> None:
     first = client.get("/api/telemetry", params={"t": 12.5}).json()
     second = client.get("/api/telemetry", params={"t": 12.5}).json()

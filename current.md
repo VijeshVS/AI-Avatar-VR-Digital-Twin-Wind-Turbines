@@ -13,7 +13,9 @@ It is explicitly a pilot/feasibility demonstrator using synthetic data—not a p
 ## Current architecture
 
 ```text
-Synthetic telemetry
+Nominal generator → physical modifiers → sensor-quality modifiers
+        ↓
+Measured sample (turbine_id, asset_time_h, true vs measured)
         ↓
 Rule-based health scoring + explainability
         ↓
@@ -21,6 +23,12 @@ FastAPI service and shared session clock
         ↓
 Unity turbine twin + browser operator console + AI copilot
 ```
+
+The simulator is layered and deterministic on a one-asset-hour grid. Physical
+modifiers change what the turbine does; sensor-quality modifiers only corrupt
+what its sensors report. Every sample and API response already carries a
+`turbine_id` (default `"T1"`), so fleet support is a data change rather than a
+schema migration.
 
 The project has three main parts:
 
@@ -55,9 +63,9 @@ The turbine is placed in a generated environment containing procedural hilly ter
 
 ### 2. Synthetic telemetry simulation
 
-The FastAPI service generates deterministic, reproducible telemetry for one turbine.
+The FastAPI service generates deterministic, reproducible telemetry for one turbine. The engine samples once per asset-hour (0.125 simulation seconds at eight asset-hours per second), and noise is seeded per `(turbine_seed, signal, tick)`, so seeking is random-access.
 
-Signals include wind speed, ambient temperature, rotor RPM, active power, power ratio, yaw angle, gearbox temperature and vibration, nacelle vibration, generator temperature, converter faults, pitch angle and error, blade-pass frequency, rotor azimuth, and rotor imbalance.
+Signals include wind speed, ambient temperature, rotor RPM, active power, power ratio, yaw angle, gearbox temperature and vibration, nacelle vibration, generator temperature, converter faults, pitch angle and error, blade-pass frequency, rotor azimuth, rotor imbalance, and dedicated main-bearing temperature and vibration channels. Each signal keeps a true value and a measured value apart; sensor faults can corrupt the latter without changing the former.
 
 Available scenarios:
 
@@ -203,7 +211,7 @@ Real headset comfort, stereo rendering, controller ergonomics, haptics, and head
 The Python service currently passes:
 
 ```text
-110 passed, 1 warning
+122 passed, 1 warning
 ```
 
 Python tests cover telemetry generation, fault progression, health scoring, explainability, prognosis, session-clock behavior, API contracts, copilot validation, repair procedures, and the web console.
@@ -240,4 +248,7 @@ It is best described as an end-to-end wind-turbine digital-twin demonstrator, no
 
 ## Repository state note
 
-The working tree currently contains uncommitted local changes, including `CopilotPanel.cs`, `style.css`, `ProjectVersion.txt`, VS Code settings, and an untracked `.playwright-mcp` directory.
+The Phase 0 foundations are in place: the layered simulator, deterministic
+one-asset-hour sampling, `turbine_id` on the wire, and dedicated main-bearing
+signals. The last single-turbine state is tagged `v0-single-turbine`; later
+phases build on this branch.

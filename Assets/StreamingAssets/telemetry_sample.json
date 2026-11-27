@@ -2,7 +2,9 @@
   "frames": [
     {
       "schema_version": 1,
+      "turbine_id": "T1",
       "tick": 0,
+      "asset_time_h": 0.0,
       "elapsed_s": 0.0,
       "scenario": "gearbox_degradation",
       "healthy_asset": false,
@@ -16,88 +18,136 @@
       "signals": [
         {
           "id": "wind_speed_ms",
+          "unit": "m/s",
           "value": 6.8078,
-          "unit": "m/s"
+          "true": 6.8078,
+          "measured": 6.8078
         },
         {
           "id": "ambient_temp_c",
+          "unit": "degC",
           "value": 7.9103,
-          "unit": "degC"
+          "true": 7.9103,
+          "measured": 7.9103
         },
         {
           "id": "rotor_rpm",
+          "unit": "rpm",
           "value": 3.9451,
-          "unit": "rpm"
+          "true": 3.9451,
+          "measured": 3.9451
         },
         {
           "id": "active_power_kw",
+          "unit": "kW",
           "value": 110.4233,
-          "unit": "kW"
+          "true": 110.4233,
+          "measured": 110.4233
         },
         {
           "id": "power_ratio",
+          "unit": "0-1",
           "value": 0.9993,
-          "unit": "0-1"
+          "true": 0.9993,
+          "measured": 0.9993
         },
         {
           "id": "yaw_deg",
+          "unit": "deg",
           "value": 187.2111,
-          "unit": "deg"
+          "true": 187.2111,
+          "measured": 187.2111
         },
         {
           "id": "gearbox_temp_c",
+          "unit": "degC",
           "value": 57.5814,
-          "unit": "degC"
+          "true": 57.5814,
+          "measured": 57.5814
         },
         {
           "id": "gearbox_temp_rise_c",
+          "unit": "degC",
           "value": 0.0352,
-          "unit": "degC"
+          "true": 0.0352,
+          "measured": 0.0352
         },
         {
           "id": "gearbox_vibration_mm_s",
+          "unit": "mm/s",
           "value": 1.7007,
-          "unit": "mm/s"
+          "true": 1.7007,
+          "measured": 1.7007
         },
         {
           "id": "nacelle_vibration_mm_s",
+          "unit": "mm/s",
           "value": 0.8625,
-          "unit": "mm/s"
+          "true": 0.8625,
+          "measured": 0.8625
         },
         {
           "id": "generator_winding_temp_c",
+          "unit": "degC",
           "value": 71.4235,
-          "unit": "degC"
+          "true": 71.4235,
+          "measured": 71.4235
         },
         {
           "id": "converter_faults",
+          "unit": "count",
           "value": 0.0,
-          "unit": "count"
+          "true": 0.0,
+          "measured": 0.0
         },
         {
           "id": "pitch_angle_deg",
+          "unit": "deg",
           "value": -0.3439,
-          "unit": "deg"
+          "true": -0.3439,
+          "measured": -0.3439
         },
         {
           "id": "pitch_position_error_deg",
+          "unit": "deg",
           "value": 0.2254,
-          "unit": "deg"
+          "true": 0.2254,
+          "measured": 0.2254
         },
         {
           "id": "blade_pass_hz",
+          "unit": "Hz",
           "value": 0.1973,
-          "unit": "Hz"
+          "true": 0.1973,
+          "measured": 0.1973
         },
         {
           "id": "rotor_angle_deg",
+          "unit": "deg",
           "value": 0.0,
-          "unit": "deg"
+          "true": 0.0,
+          "measured": 0.0
         },
         {
           "id": "rotor_imbalance_index",
+          "unit": "0-1",
           "value": 0.0,
-          "unit": "0-1"
+          "true": 0.0,
+          "measured": 0.0
+        },
+        {
+          "id": "main_bearing_temp",
+          "unit": "degC",
+          "value": 22.9159,
+          "true": 22.9159,
+          "measured": 22.9159
+        },
+        {
+          "id": "main_bearing_vibration",
+          "unit": "mm/s",
+          "value": 1.3842,
+          "true": 1.3842,
+          "measured": 1.3842
         }
       ],
       "components": [
@@ -290,7 +340,9 @@
     },
     {
       "schema_version": 1,
-      "tick": 60,
+      "turbine_id": "T1",
+      "tick": 480,
+      "asset_time_h": 480.0,
       "elapsed_s": 60.0,
       "scenario": "gearbox_degradation",
       "healthy_asset": false,
@@ -304,88 +356,136 @@
       "signals": [
         {
           "id": "wind_speed_ms",
+          "unit": "m/s",
           "value": 10.3449,
-          "unit": "m/s"
+          "true": 10.3449,
+          "measured": 10.3449
         },
         {
           "id": "ambient_temp_c",
+          "unit": "degC",
           "value": 7.6183,
-          "unit": "degC"
+          "true": 7.6183,
+          "measured": 7.6183
         },
         {
           "id": "rotor_rpm",
+          "unit": "rpm",
           "value": 9.577,
-          "unit": "rpm"
+          "true": 9.577,
+          "measured": 9.577
         },
         {
           "id": "active_power_kw",
+          "unit": "kW",
           "value": 1531.2372,
-          "unit": "kW"
+          "true": 1531.2372,
+          "measured": 1531.2372
         },
         {
           "id": "power_ratio",
+          "unit": "0-1",
           "value": 0.9687,
-          "unit": "0-1"
+          "true": 0.9687,
+          "measured": 0.9687
         },
         {
           "id": "yaw_deg",
+          "unit": "deg",
           "value": 186.5535,
-          "unit": "deg"
+          "true": 186.5535,
+          "measured": 186.5535
         },
         {
           "id": "gearbox_temp_c",
+          "unit": "degC",
           "value": 76.4608,
-          "unit": "degC"
+          "true": 76.4608,
+          "measured": 76.4608
         },
         {
           "id": "gearbox_temp_rise_c",
+          "unit": "degC",
           "value": 11.1611,
-          "unit": "degC"
+          "true": 11.1611,
+          "measured": 11.1611
         },
         {
           "id": "gearbox_vibration_mm_s",
+          "unit": "mm/s",
           "value": 4.8982,
-          "unit": "mm/s"
+          "true": 4.8982,
+          "measured": 4.8982
         },
         {
           "id": "nacelle_vibration_mm_s",
+          "unit": "mm/s",
           "value": 1.8302,
-          "unit": "mm/s"
+          "true": 1.8302,
+          "measured": 1.8302
         },
         {
           "id": "generator_winding_temp_c",
+          "unit": "degC",
           "value": 86.854,
-          "unit": "degC"
+          "true": 86.854,
+          "measured": 86.854
         },
         {
           "id": "converter_faults",
+          "unit": "count",
           "value": 0.0,
-          "unit": "count"
+          "true": 0.0,
+          "measured": 0.0
         },
         {
           "id": "pitch_angle_deg",
+          "unit": "deg",
           "value": -0.3718,
-          "unit": "deg"
+          "true": -0.3718,
+          "measured": -0.3718
         },
         {
           "id": "pitch_position_error_deg",
+          "unit": "deg",
           "value": 0.2192,
-          "unit": "deg"
+          "true": 0.2192,
+          "measured": 0.2192
         },
         {
           "id": "blade_pass_hz",
+          "unit": "Hz",
           "value": 0.4788,
-          "unit": "Hz"
+          "true": 0.4788,
+          "measured": 0.4788
         },
         {
           "id": "rotor_angle_deg",
+          "unit": "deg",
           "value": 170.2243,
-          "unit": "deg"
+          "true": 170.2243,
+          "measured": 170.2243
         },
         {
           "id": "rotor_imbalance_index",
+          "unit": "0-1",
           "value": 0.0,
-          "unit": "0-1"
+          "true": 0.0,
+          "measured": 0.0
+        },
+        {
+          "id": "main_bearing_temp",
+          "unit": "degC",
+          "value": 26.6532,
+          "true": 26.6532,
+          "measured": 26.6532
+        },
+        {
+          "id": "main_bearing_vibration",
+          "unit": "mm/s",
+          "value": 1.7143,
+          "true": 1.7143,
+          "measured": 1.7143
         }
       ],
       "components": [
@@ -421,7 +521,7 @@
         {
           "id": "main_bearing",
           "label": "Main Bearing",
-          "health": 0.4898,
+          "health": 0.5012,
           "state": "warning",
           "trend": 0.0,
           "factors": [
@@ -578,7 +678,9 @@
     },
     {
       "schema_version": 1,
-      "tick": 120,
+      "turbine_id": "T1",
+      "tick": 960,
+      "asset_time_h": 960.0,
       "elapsed_s": 120.0,
       "scenario": "gearbox_degradation",
       "healthy_asset": false,
@@ -592,88 +694,136 @@
       "signals": [
         {
           "id": "wind_speed_ms",
+          "unit": "m/s",
           "value": 11.7638,
-          "unit": "m/s"
+          "true": 11.7638,
+          "measured": 11.7638
         },
         {
           "id": "ambient_temp_c",
+          "unit": "degC",
           "value": 7.7829,
-          "unit": "degC"
+          "true": 7.7829,
+          "measured": 7.7829
         },
         {
           "id": "rotor_rpm",
+          "unit": "rpm",
           "value": 12.1556,
-          "unit": "rpm"
+          "true": 12.1556,
+          "measured": 12.1556
         },
         {
           "id": "active_power_kw",
+          "unit": "kW",
           "value": 3069.6892,
-          "unit": "kW"
+          "true": 3069.6892,
+          "measured": 3069.6892
         },
         {
           "id": "power_ratio",
+          "unit": "0-1",
           "value": 0.9497,
-          "unit": "0-1"
+          "true": 0.9497,
+          "measured": 0.9497
         },
         {
           "id": "yaw_deg",
+          "unit": "deg",
           "value": 185.8996,
-          "unit": "deg"
+          "true": 185.8996,
+          "measured": 185.8996
         },
         {
           "id": "gearbox_temp_c",
+          "unit": "degC",
           "value": 87.2401,
-          "unit": "degC"
+          "true": 87.2401,
+          "measured": 87.2401
         },
         {
           "id": "gearbox_temp_rise_c",
+          "unit": "degC",
           "value": 18.0921,
-          "unit": "degC"
+          "true": 18.0921,
+          "measured": 18.0921
         },
         {
           "id": "gearbox_vibration_mm_s",
+          "unit": "mm/s",
           "value": 6.8222,
-          "unit": "mm/s"
+          "true": 6.8222,
+          "measured": 6.8222
         },
         {
           "id": "nacelle_vibration_mm_s",
+          "unit": "mm/s",
           "value": 2.3733,
-          "unit": "mm/s"
+          "true": 2.3733,
+          "measured": 2.3733
         },
         {
           "id": "generator_winding_temp_c",
+          "unit": "degC",
           "value": 94.0343,
-          "unit": "degC"
+          "true": 94.0343,
+          "measured": 94.0343
         },
         {
           "id": "converter_faults",
+          "unit": "count",
           "value": 0.0,
-          "unit": "count"
+          "true": 0.0,
+          "measured": 0.0
         },
         {
           "id": "pitch_angle_deg",
+          "unit": "deg",
           "value": -0.423,
-          "unit": "deg"
+          "true": -0.423,
+          "measured": -0.423
         },
         {
           "id": "pitch_position_error_deg",
+          "unit": "deg",
           "value": 0.2242,
-          "unit": "deg"
+          "true": 0.2242,
+          "measured": 0.2242
         },
         {
           "id": "blade_pass_hz",
+          "unit": "Hz",
           "value": 0.6078,
-          "unit": "Hz"
+          "true": 0.6078,
+          "measured": 0.6078
         },
         {
           "id": "rotor_angle_deg",
+          "unit": "deg",
           "value": 61.5527,
-          "unit": "deg"
+          "true": 61.5527,
+          "measured": 61.5527
         },
         {
           "id": "rotor_imbalance_index",
+          "unit": "0-1",
           "value": 0.0,
-          "unit": "0-1"
+          "true": 0.0,
+          "measured": 0.0
+        },
+        {
+          "id": "main_bearing_temp",
+          "unit": "degC",
+          "value": 28.6249,
+          "true": 28.6249,
+          "measured": 28.6249
+        },
+        {
+          "id": "main_bearing_vibration",
+          "unit": "mm/s",
+          "value": 1.8512,
+          "true": 1.8512,
+          "measured": 1.8512
         }
       ],
       "components": [
@@ -709,7 +859,7 @@
         {
           "id": "main_bearing",
           "label": "Main Bearing",
-          "health": 0.1052,
+          "health": 0.1276,
           "state": "critical",
           "trend": 0.0,
           "factors": [

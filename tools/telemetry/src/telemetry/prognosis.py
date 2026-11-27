@@ -18,8 +18,9 @@ from dataclasses import dataclass
 
 from . import health as health_mod
 from . import simulation
+from .models import DEFAULT_TURBINE_ID
 
-HOURS_PER_SIM_SECOND = 8.0
+HOURS_PER_SIM_SECOND = simulation.ASSET_HOURS_PER_SIM_SECOND
 
 # Match health.state_for, so the estimate and the avatar agree on "critical".
 CRITICAL_HEALTH = 0.45
@@ -75,6 +76,7 @@ class PlantPrognosis:
     scenario: str
     plant_health: float
     components: tuple[TrendEstimate, ...]
+    turbine_id: str = DEFAULT_TURBINE_ID
 
     def worst(self) -> TrendEstimate | None:
         return min(self.components, key=lambda c: c.health, default=None)
@@ -82,6 +84,7 @@ class PlantPrognosis:
     def to_dict(self) -> dict[str, object]:
         worst = self.worst()
         return {
+            "turbine_id": self.turbine_id,
             "t": round(self.t, 1),
             "scenario": self.scenario,
             "plant_health": round(self.plant_health, 4),
@@ -90,11 +93,16 @@ class PlantPrognosis:
         }
 
 
-def _health_at(t: float, scenario: str) -> dict[str, float]:
-    """Raw (unsmoothed) health at one instant, without touching service state."""
-    signals = simulation.build_signals(t, scenario)
-    values = {s.id: s.value for s in signals}
-    return {c.id: c.health for c in health_mod.score_all(values)}
+def _health_at(t: float, scenario: str, turbine_id: str) -> dict[str, float]:
+    """Raw (unsmoothed) health at one instant, without touching service state.
+
+    Only measured values are scored, on the same one-asset-hour grid the engine
+    uses, so a prognosis is reproducible after a seek.
+    """
+    sample = simulation.sample_at_tick(
+        simulation.tick_index_at(t), scenario, turbine_id=turbine_id
+    )
+    return {c.id: c.health for c in health_mod.score_sample(sample)}
 
 
 def _linear_fit(points: list[tuple[float, float]]) -> tuple[float, float]:
@@ -157,7 +165,10 @@ def _estimate_component(component_id: str, samples: list[tuple[float, float]]) -
 
 
 def estimate(
-    t: float, scenario: str, current: dict[str, float] | None = None
+    t: float,
+    scenario: str,
+    current: dict[str, float] | None = None,
+    turbine_id: str = DEFAULT_TURBINE_ID,
 ) -> PlantPrognosis:
     """Measure every component's trend over the window ending at ``t``.
 
@@ -177,7 +188,7 @@ def estimate(
 
     histories: dict[str, list[tuple[float, float]]] = {}
     for tick in ticks:
-        for component_id, health in _health_at(tick, scenario).items():
+        for component_id, health in _health_at(tick, scenario, turbine_id).items():
             histories.setdefault(component_id, []).append((tick, health))
 
     components: list[TrendEstimate] = []
@@ -208,4 +219,10 @@ def estimate(
             for c in components
         )
     )
-    return PlantPrognosis(t=end, scenario=scenario, plant_health=plant, components=tuple(components))
+    return PlantPrognosis(
+        t=end,
+        scenario=scenario,
+        plant_health=plant,
+        components=tuple(components),
+        turbine_id=turbine_id,
+    )

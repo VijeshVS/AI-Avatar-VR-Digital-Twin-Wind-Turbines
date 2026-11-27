@@ -17,35 +17,48 @@ namespace Vrar.Telemetry
         private readonly string _endpoint;
         private readonly int _timeoutSeconds;
         private readonly bool _followServerClock;
+        private readonly string _turbineId;
 
         public HttpTelemetrySource(
             string endpoint,
             int timeoutSeconds = 3,
-            bool followServerClock = false)
+            bool followServerClock = false,
+            string turbineId = null)
         {
             _endpoint = (endpoint ?? string.Empty).TrimEnd('/');
             _timeoutSeconds = timeoutSeconds;
             _followServerClock = followServerClock;
+            _turbineId = turbineId;
         }
 
         public string Endpoint => _endpoint;
         public bool FollowServerClock => _followServerClock;
+        public string TurbineId => _turbineId;
 
         /// <summary>
         /// URL for one frame. In follow mode the session clock decides the moment,
         /// so <c>t</c> is omitted; otherwise the caller's token is the timestamp.
+        /// An optional turbine id is appended so the request is explicit about
+        /// which machine it is for.
         /// </summary>
-        public static string TelemetryUrl(string endpoint, int requestToken, bool followServerClock)
+        public static string TelemetryUrl(
+            string endpoint, int requestToken, bool followServerClock, string turbineId = null)
         {
             string root = (endpoint ?? string.Empty).TrimEnd('/');
-            return followServerClock
-                ? $"{root}/api/telemetry"
-                : $"{root}/api/telemetry?t={requestToken / 1f:0.0}";
+            string query = followServerClock ? string.Empty : $"?t={requestToken / 1f:0.0}";
+
+            if (!string.IsNullOrEmpty(turbineId))
+            {
+                string separator = query.Length == 0 ? "?" : "&";
+                query += $"{separator}turbine_id={UnityWebRequest.EscapeURL(turbineId)}";
+            }
+
+            return $"{root}/api/telemetry{query}";
         }
 
         public IEnumerator Fetch(int requestToken, Action<TelemetryFrame, string> onComplete)
         {
-            string url = TelemetryUrl(_endpoint, requestToken, _followServerClock);
+            string url = TelemetryUrl(_endpoint, requestToken, _followServerClock, _turbineId);
             using UnityWebRequest request = UnityWebRequest.Get(url);
             request.timeout = _timeoutSeconds;
             yield return request.SendWebRequest();

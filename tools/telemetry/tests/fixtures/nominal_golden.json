@@ -1,0 +1,225 @@
+{
+  "scenario": "nominal",
+  "frames": [
+    {
+      "t": 0.0,
+      "signals": {
+        "wind_speed_ms": 6.807833656854406,
+        "ambient_temp_c": 7.910344908005409,
+        "rotor_rpm": 3.9451036182894725,
+        "active_power_kw": 110.42333766127167,
+        "power_ratio": 0.9992974086862658,
+        "yaw_deg": 187.21111219512122,
+        "gearbox_temp_c": 57.58143930805073,
+        "gearbox_temp_rise_c": 0.0352320882032231,
+        "gearbox_vibration_mm_s": 1.7007150030880889,
+        "nacelle_vibration_mm_s": 0.8625244981188718,
+        "generator_winding_temp_c": 71.42353246565297,
+        "converter_faults": 0.0,
+        "pitch_angle_deg": -0.3438685969479638,
+        "pitch_position_error_deg": 0.2253908614322707,
+        "blade_pass_hz": 0.19725518091447364,
+        "rotor_angle_deg": 0.0,
+        "rotor_imbalance_index": 0.0
+      }
+    },
+    {
+      "t": 7.5,
+      "signals": {
+        "wind_speed_ms": 8.33677996348785,
+        "ambient_temp_c": 10.042346015365267,
+        "rotor_rpm": 6.22257598399971,
+        "active_power_kw": 433.38974878882476,
+        "power_ratio": 0.9994869858227073,
+        "yaw_deg": 188.48182827664817,
+        "gearbox_temp_c": 63.15791654882593,
+        "gearbox_temp_rise_c": 0.2261762706039363,
+        "gearbox_vibration_mm_s": 1.8476143366785303,
+        "nacelle_vibration_mm_s": 1.0496306879037347,
+        "generator_winding_temp_c": 77.60913581253733,
+        "converter_faults": 0.0,
+        "pitch_angle_deg": -0.3859968494905158,
+        "pitch_position_error_deg": 0.14140437633359956,
+        "blade_pass_hz": 0.3111287991999855,
+        "rotor_angle_deg": 263.3608102253335,
+        "rotor_imbalance_index": 0.0
+      }
+    },
+    {
+      "t": 15.0,
+      "signals": {
+        "wind_speed_ms": 7.8817819477799995,
+        "ambient_temp_c": 9.529586609487861,
+        "rotor_rpm": 5.517266554589213,
+        "active_power_kw": 302.2033655107001,
+        "power_ratio": 0.9998538698139343,
+        "yaw_deg": 189.44560801125232,
+        "gearbox_temp_c": 61.777363534825966,
+        "gearbox_temp_rise_c": 0.3659675616392235,
+        "gearbox_vibration_mm_s": 1.8256541424325434,
+        "nacelle_vibration_mm_s": 0.9524257252159858,
+        "generator_winding_temp_c": 76.05831041337478,
+        "converter_faults": 0.0,
+        "pitch_angle_deg": -0.4675266253187628,
+        "pitch_position_error_deg": 0.11821163873792417,
+        "blade_pass_hz": 0.27586332772946065,
+        "rotor_angle_deg": 233.14426662422267,
+        "rotor_imbalance_index": 0.0
+      }
+    },
+    {
+      "t": 30.0,
+      "signals": {
+        "wind_speed_ms": 9.115778786406748,
+        "ambient_temp_c": 7.723454258496268,
+        "rotor_rpm": 7.479163794291061,
+        "active_power_kw": 752.42891445422,
+        "power_ratio": 0.9993450777123821,
+        "yaw_deg": 186.89126666986883,
+        "gearbox_temp_c": 62.46782844635093,
+        "gearbox_temp_rise_c": 0.059854481724570974,
+        "gearbox_vibration_mm_s": 2.0062027822240163,
+        "nacelle_vibration_mm_s": 1.1200987802328497,
+        "generator_winding_temp_c": 81.0751837615859,
+        "converter_faults": 0.0,
+        "pitch_angle_deg": -0.35446171386267233,
+        "pitch_position_error_deg": 0.22099466558109965,
+        "blade_pass_hz": 0.3739581897145531,
+        "rotor_angle_deg": 227.62260087564457,
+        "rotor_imbalance_index": 0.0
+      }
+    },
+    {
+      "t": 45.0,
+      "signals": {
+        "wind_speed_ms": 11.684483180964476,
+        "ambient_temp_c": 9.845923122037615,
+        "rotor_rpm": 12.007359904834724,
+        "active_power_kw": 3115.133791781725,
+        "power_ratio": 0.999869345524867,
+        "yaw_deg": 189.11181619990543,
+        "gearbox_temp_c": 71.38845504229049,
+        "gearbox_temp_rise_c": 0.38916062763183845,
+        "gearbox_vibration_mm_s": 2.373159267207663,
+        "nacelle_vibration_mm_s": 1.436079993084389,
+        "generator_winding_temp_c": 93.61978926858642,
+        "converter_faults": 0.0,
+        "pitch_angle_deg": -0.47096567219264796,
+        "pitch_position_error_deg": 0.10609962627168076,
+        "blade_pass_hz": 0.6003679952417362,
+        "rotor_angle_deg": 157.43746452330285,
+        "rotor_imbalance_index": 0.0
+      }
+    },
+    {
+      "t": 60.0,
+      "signals": {
+        "wind_speed_ms": 10.344943477646945,
+        "ambient_temp_c": 7.618316263689599,
+        "rotor_rpm": 9.576957844486326,
+        "active_power_kw": 1579.875688312302,
+        "power_ratio": 0.9994229622669852,
+        "yaw_deg": 186.553511756295,
+        "gearbox_temp_c": 65.37776529986097,
+        "gearbox_temp_rise_c": 0.07808068690518155,
+        "gearbox_vibration_mm_s": 2.1890132557295408,
+        "nacelle_vibration_mm_s": 1.2760196804548942,
+        "generator_winding_temp_c": 86.85395443308322,
+        "converter_faults": 0.0,
+        "pitch_angle_deg": -0.3717693926633766,
+        "pitch_position_error_deg": 0.2192486076264808,
+        "blade_pass_hz": 0.47884789222431634,
+        "rotor_angle_deg": 170.22431964954896,
+        "rotor_imbalance_index": 0.0
+      }
+    },
+    {
+      "t": 90.0,
+      "signals": {
+        "wind_speed_ms": 11.247352296097677,
+        "ambient_temp_c": 7.62868204969585,
+        "rotor_rpm": 11.198704756182194,
+        "active_power_kw": 2526.323505660443,
+        "power_ratio": 0.9995274196402395,
+        "yaw_deg": 186.21649328660376,
+        "gearbox_temp_c": 67.71579762655034,
+        "gearbox_temp_rise_c": 0.08896592516563828,
+        "gearbox_vibration_mm_s": 2.3331609609439865,
+        "nacelle_vibration_mm_s": 1.3984013741715695,
+        "generator_winding_temp_c": 91.345275692535,
+        "converter_faults": 0.0,
+        "pitch_angle_deg": -0.3949821422754671,
+        "pitch_position_error_deg": 0.22031717265214235,
+        "blade_pass_hz": 0.5599352378091097,
+        "rotor_angle_deg": 130.42054124329778,
+        "rotor_imbalance_index": 0.0
+      }
+    },
+    {
+      "t": 120.0,
+      "signals": {
+        "wind_speed_ms": 11.763782611793152,
+        "ambient_temp_c": 7.7828831658088085,
+        "rotor_rpm": 12.15561152605839,
+        "active_power_kw": 3231.2518255303467,
+        "power_ratio": 0.9996535291963765,
+        "yaw_deg": 185.89961359273028,
+        "gearbox_temp_c": 69.24011055629441,
+        "gearbox_temp_rise_c": 0.09206806754504271,
+        "gearbox_vibration_mm_s": 2.422181415713304,
+        "nacelle_vibration_mm_s": 1.4732596940638338,
+        "generator_winding_temp_c": 94.03430264335589,
+        "converter_faults": 0.0,
+        "pitch_angle_deg": -0.42300648808365904,
+        "pitch_position_error_deg": 0.22417362110414868,
+        "blade_pass_hz": 0.6077805763029195,
+        "rotor_angle_deg": 61.55267448271754,
+        "rotor_imbalance_index": 0.0
+      }
+    },
+    {
+      "t": 150.0,
+      "signals": {
+        "wind_speed_ms": 11.21787305398295,
+        "ambient_temp_c": 8.102421995602862,
+        "rotor_rpm": 11.144700078766505,
+        "active_power_kw": 2490.6180262502644,
+        "power_ratio": 0.9997953334216583,
+        "yaw_deg": 185.62194332824583,
+        "gearbox_temp_c": 68.11088864300989,
+        "gearbox_temp_rise_c": 0.08746653488344691,
+        "gearbox_vibration_mm_s": 2.342165306275288,
+        "nacelle_vibration_mm_s": 1.4070316583967573,
+        "generator_winding_temp_c": 91.40015551150387,
+        "converter_faults": 0.0,
+        "pitch_angle_deg": -0.4545185381462722,
+        "pitch_position_error_deg": 0.230600377209921,
+        "blade_pass_hz": 0.5572350039383253,
+        "rotor_angle_deg": 358.26635649690667,
+        "rotor_imbalance_index": 0.0
+      }
+    },
+    {
+      "t": 300.0,
+      "signals": {
+        "wind_speed_ms": 12.28226594296853,
+        "ambient_temp_c": 12.353483030014424,
+        "rotor_rpm": 12.6,
+        "active_power_kw": 3600.0,
+        "power_ratio": 1.0,
+        "yaw_deg": 185.33447317570483,
+        "gearbox_temp_c": 74.3376148152235,
+        "gearbox_temp_rise_c": -0.01586821479091327,
+        "gearbox_vibration_mm_s": 2.5353140449684264,
+        "nacelle_vibration_mm_s": 1.5198193958030082,
+        "generator_winding_temp_c": 95.48682869233474,
+        "converter_faults": 0.0,
+        "pitch_angle_deg": -0.6106683478499904,
+        "pitch_position_error_deg": 0.2827077662757547,
+        "blade_pass_hz": 0.63,
+        "rotor_angle_deg": 142.704504263567,
+        "rotor_imbalance_index": 0.0
+      }
+    }
+  ]
+}

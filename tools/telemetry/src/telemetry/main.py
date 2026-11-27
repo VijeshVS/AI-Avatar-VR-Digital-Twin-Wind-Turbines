@@ -29,7 +29,13 @@ from . import copilot
 from . import health as health_mod
 from . import prognosis as prognosis_mod
 from . import simulation
-from .models import COMPONENT_IDS, SCHEMA_VERSION, ComponentHealth, TelemetryFrame
+from .models import (
+    COMPONENT_IDS,
+    DEFAULT_TURBINE_ID,
+    SCHEMA_VERSION,
+    ComponentHealth,
+    TelemetryFrame,
+)
 from .session import SessionState
 
 app = FastAPI(
@@ -42,7 +48,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-SAMPLE_RATE_HZ = 1.0
+# The engine samples once per asset-hour. In simulation time that is 0.125 s,
+# i.e. 8 ticks per simulated second. Declared here for the wire ``tick`` field.
+SAMPLE_RATE_HZ = 1.0 / simulation.SIM_SECONDS_PER_ASSET_HOUR
 # Exponential smoothing on the reported health. Real condition monitoring filters
 # before alarming, and the avatar must not flicker amber/red on sensor noise.
 SMOOTHING_ALPHA = 0.3
@@ -86,20 +94,25 @@ class AssistantRequest(BaseModel):
 state = SessionState()
 
 
-def _smooth(component, streaming: bool) -> ComponentHealth:
-    """Blend the raw score towards the previous value when streaming."""
+def _smooth(component, streaming: bool, turbine_id: str) -> ComponentHealth:
+    """Blend the raw score towards the previous value when streaming.
+
+    Smoothing state is keyed by ``(turbine_id, component_id)`` so two turbines
+    never inherit each other's trend.
+    """
+    key = (turbine_id, component.id)
     if not streaming:
-        state.smoothed_health[component.id] = component.health
+        state.smoothed_health[key] = component.health
         return component
 
-    previous = state.smoothed_health.get(component.id)
+    previous = state.smoothed_health.get(key)
     if previous is None:
-        state.smoothed_health[component.id] = component.health
+        state.smoothed_health[key] = component.health
         return component
 
     alpha = SMOOTHING_ALPHA
     blended = previous + alpha * (component.health - previous)
-    state.smoothed_health[component.id] = blended
+    state.smoothed_health[key] = blended
     return ComponentHealth(
         id=component.id,
         label=component.label,
@@ -110,31 +123,53 @@ def _smooth(component, streaming: bool) -> ComponentHealth:
     )
 
 
-def frame_at(elapsed_s: float, scenario: str | None = None) -> TelemetryFrame:
+def frame_at(
+    elapsed_s: float,
+    scenario: str | None = None,
+    turbine_id: str = DEFAULT_TURBINE_ID,
+) -> TelemetryFrame:
     target = scenario or state.scenario
     if target not in simulation.SCENARIOS:
         raise HTTPException(status_code=404, detail=f"unknown scenario '{target}'")
 
-    elapsed = max(0.0, elapsed_s)
-    streaming = elapsed >= state.last_elapsed_s
-    previous = state.previous_health if streaming else {}
+    turbine_id = turbine_id or DEFAULT_TURBINE_ID
+    requested = max(0.0, elapsed_s)
+    sample = simulation.sample_at(requested, target, turbine_id=turbine_id)
+    elapsed = sample.elapsed_s
 
-    signals = simulation.build_signals(elapsed, target)
-    values = {s.id: s.value for s in signals}
-    components = tuple(_smooth(c, streaming) for c in health_mod.score_all(values, previous))
+    streaming = elapsed >= state.last_elapsed_s
+    previous = {
+        component_id: health
+        for (owner, component_id), health in state.previous_health.items()
+        if streaming and owner == turbine_id
+    }
+
+    # Health is computed from the measured values only. A stuck or noisy sensor
+    # can move this score; the true state is never passed to the scorer.
+    components = tuple(
+        _smooth(component, streaming, turbine_id)
+        for component in health_mod.score_sample(sample, previous)
+    )
 
     state.scenario = target
     state.last_elapsed_s = elapsed
-    state.previous_health = {c.id: c.health for c in components}
+    # Replace only this turbine's rows; other turbines keep their own trend.
+    state.previous_health = {
+        key: value
+        for key, value in state.previous_health.items()
+        if key[0] != turbine_id
+    } | {(turbine_id, component.id): component.health for component in components}
 
     return TelemetryFrame(
         schema_version=SCHEMA_VERSION,
-        tick=int(round(elapsed * SAMPLE_RATE_HZ)),
+        turbine_id=turbine_id,
+        tick=sample.tick,
+        asset_time_h=sample.asset_time_h,
         elapsed_s=elapsed,
         scenario=target,
         healthy_asset=simulation.SCENARIOS[target].healthy_asset,
-        environment=simulation.environment_from(values),
-        signals=signals,
+        environment=simulation.environment_from(sample.measured),
+        signals=sample.signals,
         components=components,
     )
 
@@ -168,21 +203,31 @@ def scenarios() -> dict[str, list[dict[str, object]]]:
 
 
 @app.get("/api/telemetry")
-def telemetry(t: float | None = None, scenario: str | None = None) -> JSONResponse:
+def telemetry(
+    t: float | None = None,
+    scenario: str | None = None,
+    turbine_id: str = DEFAULT_TURBINE_ID,
+) -> JSONResponse:
     """One full frame. Without ``t`` the shared session clock is used.
 
     ``?t=`` stays an explicit override: the PlayMode suite and the offline replay
     ask for a specific moment and must keep receiving exactly that frame.
     """
     elapsed = t if t is not None else state.current_elapsed()
-    return JSONResponse(frame_at(elapsed, scenario).to_dict())
+    return JSONResponse(frame_at(elapsed, scenario, turbine_id).to_dict())
 
 
 @app.get("/api/components")
-def components(t: float = 0.0, scenario: str | None = None) -> dict[str, object]:
-    frame = frame_at(t, scenario)
+def components(
+    t: float = 0.0,
+    scenario: str | None = None,
+    turbine_id: str = DEFAULT_TURBINE_ID,
+) -> dict[str, object]:
+    frame = frame_at(t, scenario, turbine_id)
     return {
+        "turbine_id": frame.turbine_id,
         "tick": frame.tick,
+        "asset_time_h": round(frame.asset_time_h, 4),
         "scenario": frame.scenario,
         "plant_health": round(health_mod.plant_health(frame.components), 4),
         "components": [
@@ -199,11 +244,16 @@ def components(t: float = 0.0, scenario: str | None = None) -> dict[str, object]
 
 
 @app.get("/api/fault")
-def fault(t: float = 0.0, scenario: str | None = None) -> dict[str, object]:
+def fault(
+    t: float = 0.0,
+    scenario: str | None = None,
+    turbine_id: str = DEFAULT_TURBINE_ID,
+) -> dict[str, object]:
     """Structured fault verdict: the predictive-maintenance hand-off point."""
-    frame = frame_at(t, scenario)
+    frame = frame_at(t, scenario, turbine_id)
     worst = min(frame.components, key=lambda c: c.health, default=None)
     return {
+        "turbine_id": frame.turbine_id,
         "scenario": frame.scenario,
         "healthy_asset": frame.healthy_asset,
         "plant_health": round(health_mod.plant_health(frame.components), 4),
@@ -230,6 +280,7 @@ def select_scenario(scenario_id: str, selection: ScenarioSelection | None = None
     state.select(scenario_id, reset_t=reset_clock)
     frame = frame_at(state.current_elapsed(), scenario_id)
     return {
+        "turbine_id": frame.turbine_id,
         "scenario": frame.scenario,
         "healthy_asset": frame.healthy_asset,
         "plant_health": round(health_mod.plant_health(frame.components), 4),
@@ -271,7 +322,7 @@ def set_session(command: SessionCommand) -> dict[str, object]:
 
 
 @app.get("/api/state")
-def state_snapshot() -> dict[str, object]:
+def state_snapshot(turbine_id: str = DEFAULT_TURBINE_ID) -> dict[str, object]:
     """Everything a console needs in one coherent snapshot.
 
     The frame and the prognosis are computed at the same instant as the session
@@ -279,9 +330,12 @@ def state_snapshot() -> dict[str, object]:
     another.
     """
     elapsed = state.current_elapsed()
-    frame = frame_at(elapsed, state.scenario)
+    frame = frame_at(elapsed, state.scenario, turbine_id)
     estimate = prognosis_mod.estimate(
-        frame.elapsed_s, frame.scenario, {c.id: c.health for c in frame.components}
+        frame.elapsed_s,
+        frame.scenario,
+        {c.id: c.health for c in frame.components},
+        turbine_id=frame.turbine_id,
     )
 
     session = state.snapshot()
@@ -294,12 +348,19 @@ def state_snapshot() -> dict[str, object]:
 
 
 @app.get("/api/prognosis")
-def prognosis(t: float | None = None, scenario: str | None = None) -> dict[str, object]:
+def prognosis(
+    t: float | None = None,
+    scenario: str | None = None,
+    turbine_id: str = DEFAULT_TURBINE_ID,
+) -> dict[str, object]:
     """Deterministic trend and remaining-life band per component, no model involved."""
     elapsed = t if t is not None else state.current_elapsed()
-    frame = frame_at(elapsed, scenario)
+    frame = frame_at(elapsed, scenario, turbine_id)
     return prognosis_mod.estimate(
-        frame.elapsed_s, frame.scenario, {c.id: c.health for c in frame.components}
+        frame.elapsed_s,
+        frame.scenario,
+        {c.id: c.health for c in frame.components},
+        turbine_id=frame.turbine_id,
     ).to_dict()
 
 
@@ -312,7 +373,10 @@ def assistant(request: AssistantRequest) -> dict[str, object]:
 
     frame = frame_at(elapsed, request.scenario)
     estimate = prognosis_mod.estimate(
-        frame.elapsed_s, frame.scenario, {c.id: c.health for c in frame.components}
+        frame.elapsed_s,
+        frame.scenario,
+        {c.id: c.health for c in frame.components},
+        turbine_id=frame.turbine_id,
     )
 
     if request.mode == "procedure":
