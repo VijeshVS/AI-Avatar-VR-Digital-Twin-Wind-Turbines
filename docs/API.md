@@ -43,6 +43,13 @@ Rules:
 | `GET` | `/api/components?t=&turbine_id=` | Health-only roll-up |
 | `GET` | `/api/fault?t=&turbine_id=` | Worst component + recommendation |
 | `POST` | `/api/scenario/{id}` | Legacy switch; honours `reset_clock` |
+| `GET` | `/api/inject/catalog` | Scenario Lab catalog metadata, signals, and demo presets |
+| `GET` | `/api/inject` | List active injections (optional `?turbine_id=`) |
+| `POST` | `/api/inject` | Create an injection (`onset_asset_h: "now"` resolves to current asset time) |
+| `DELETE` | `/api/inject/{id}` | Remove one injection |
+| `POST` | `/api/inject/reset` | Clear all injections and return to `nominal` |
+| `GET` | `/api/inject/export` | Export active scenario and injections as JSON |
+| `POST` | `/api/inject/import` | Validate and load an exported scenario JSON |
 
 `turbine_id` defaults to `"T1"`, so every pre-fleet client keeps working.
 

@@ -6,6 +6,8 @@ const POLL_MS = 1000;
 const state = {
   data: null,
   scenarios: [],
+  catalog: null,
+  injections: [],
   history: new Map(),
   scrubbing: false,
   loading: false,
@@ -25,6 +27,23 @@ const el = {
   speed: document.getElementById('speed'),
   clock: document.getElementById('clock'),
   scrub: document.getElementById('scrub'),
+  labPresets: document.getElementById('lab-presets'),
+  labForm: document.getElementById('lab-form'),
+  labType: document.getElementById('lab-type'),
+  labSeverity: document.getElementById('lab-severity'),
+  labSeverityVal: document.getElementById('lab-severity-val'),
+  labOnsetNow: document.getElementById('lab-onset-now'),
+  labOnsetH: document.getElementById('lab-onset-h'),
+  labProgression: document.getElementById('lab-progression'),
+  labDuration: document.getElementById('lab-duration'),
+  labSignalWrap: document.getElementById('lab-signal-wrap'),
+  labSignal: document.getElementById('lab-signal'),
+  labActive: document.getElementById('lab-active'),
+  labSignals: document.getElementById('lab-signals'),
+  labReset: document.getElementById('lab-reset'),
+  labSave: document.getElementById('lab-save'),
+  labLoadBtn: document.getElementById('lab-load-btn'),
+  labLoadFile: document.getElementById('lab-load-file'),
   presets: document.getElementById('ai-presets'),
   question: document.getElementById('ai-question'),
   mode: document.getElementById('ai-mode'),
@@ -60,6 +79,8 @@ const SIGNAL_LABELS = {
   blade_pass_hz: 'blade pass frequency',
   rotor_angle_deg: 'rotor azimuth',
   rotor_imbalance_index: 'rotor imbalance index',
+  main_bearing_temp: 'main bearing temperature',
+  main_bearing_vibration: 'main bearing vibration',
 };
 
 const signalLabel = (id) => SIGNAL_LABELS[id] || pretty(id);
@@ -203,6 +224,185 @@ function renderHealth(payload) {
   }
   for (const card of el.cards.querySelectorAll('.card')) {
     card.classList.toggle('focused', card.dataset.id === session.focus);
+  }
+  renderLabSignals(frame);
+}
+
+// -- scenario lab -----------------------------------------------------------
+
+const LAB_SIGNAL_IDS = [
+  'wind_speed_ms',
+  'ambient_temp_c',
+  'gearbox_temp_c',
+  'gearbox_vibration_mm_s',
+  'generator_winding_temp_c',
+  'main_bearing_temp',
+  'main_bearing_vibration',
+  'pitch_angle_deg',
+  'pitch_position_error_deg',
+  'active_power_kw',
+];
+
+function renderLabSignals(frame) {
+  if (!el.labSignals || !frame || !Array.isArray(frame.signals)) return;
+  const byId = new Map(frame.signals.map((s) => [s.id, s]));
+  el.labSignals.replaceChildren();
+  for (const id of LAB_SIGNAL_IDS) {
+    const sig = byId.get(id);
+    if (!sig) continue;
+    const item = document.createElement('span');
+    item.className = 'lab-sig-pill';
+    item.textContent = `${signalLabel(id)}: ${fmt(sig.measured)} ${sig.unit}`;
+    el.labSignals.append(item);
+  }
+}
+
+function catalogEntryById(typeId) {
+  if (!state.catalog || !Array.isArray(state.catalog.entries)) return null;
+  return state.catalog.entries.find((entry) => entry.id === typeId) || null;
+}
+
+function syncLabDefaults() {
+  const entry = catalogEntryById(el.labType.value);
+  if (!entry) return;
+  const prog = entry.default_progression || {};
+  if (prog.kind) el.labProgression.value = prog.kind;
+  if (prog.duration_h !== undefined) el.labDuration.value = String(prog.duration_h);
+
+  const isSensor = entry.category === 'sensor';
+  el.labSignalWrap.hidden = !isSensor;
+  if (isSensor && entry.default_params && entry.default_params.signal) {
+    el.labSignal.value = entry.default_params.signal;
+  }
+}
+
+function renderActiveInjections() {
+  if (!el.labActive) return;
+  el.labActive.replaceChildren();
+  if (!state.injections.length) {
+    const empty = document.createElement('span');
+    empty.className = 'hint';
+    empty.textContent = 'No active injections — nominal physics running.';
+    el.labActive.append(empty);
+    return;
+  }
+
+  for (const inj of state.injections) {
+    const entry = catalogEntryById(inj.type);
+    const label = entry ? entry.label : inj.type;
+    const prog = inj.progression || {};
+    const paramNote = inj.params && inj.params.signal ? ` · ${inj.params.signal}` : '';
+
+    const row = document.createElement('div');
+    row.className = 'lab-active-item';
+
+    const info = document.createElement('span');
+    info.className = 'lab-active-info';
+    info.textContent =
+      `${label}${paramNote} · sev ${Number(inj.severity).toFixed(2)} · ` +
+      `onset ${Number(inj.onset_asset_h).toFixed(1)} h · ` +
+      `${prog.kind || 'ramp'} (${prog.duration_h ?? 0} h)`;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'lab-remove';
+    removeBtn.dataset.removeId = inj.id;
+    removeBtn.textContent = 'Remove';
+
+    row.append(info, removeBtn);
+    el.labActive.append(row);
+  }
+}
+
+async function loadInjections() {
+  try {
+    const response = await fetch('/api/inject', { cache: 'no-store' });
+    if (!response.ok) return;
+    const payload = await response.json();
+    state.injections = payload.injections || [];
+    renderActiveInjections();
+  } catch (_) {
+    // Keep last known injection list when polling offline.
+  }
+}
+
+async function loadCatalog() {
+  try {
+    const response = await fetch('/api/inject/catalog', { cache: 'no-store' });
+    if (!response.ok) return;
+    const catalog = await response.json();
+    state.catalog = catalog;
+
+    el.labType.replaceChildren();
+    for (const cat of catalog.categories || []) {
+      const group = document.createElement('optgroup');
+      group.label = cat.label;
+      for (const entry of (catalog.entries || []).filter((item) => item.category === cat.id)) {
+        const option = document.createElement('option');
+        option.value = entry.id;
+        option.textContent = entry.label;
+        group.append(option);
+      }
+      if (group.children.length > 0) el.labType.append(group);
+    }
+
+    el.labSignal.replaceChildren();
+    for (const signalId of catalog.signals || []) {
+      const option = document.createElement('option');
+      option.value = signalId;
+      option.textContent = `${signalLabel(signalId)} (${signalId})`;
+      el.labSignal.append(option);
+    }
+
+    el.labPresets.replaceChildren();
+    for (const preset of catalog.presets || []) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.presetId = preset.id;
+      button.title = preset.description || '';
+      button.textContent = preset.label;
+      el.labPresets.append(button);
+    }
+
+    syncLabDefaults();
+  } catch (_) {
+    el.labType.innerHTML = '<option value="">catalog unavailable</option>';
+  }
+}
+
+async function applyPreset(presetId) {
+  if (!state.catalog) return;
+  const preset = (state.catalog.presets || []).find((item) => item.id === presetId);
+  if (!preset) return;
+
+  try {
+    await fetch('/api/inject/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reset_t: Boolean(preset.reset_t) }),
+    });
+    await fetch('/api/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scenario: preset.scenario || 'nominal',
+        reset_t: Boolean(preset.reset_t),
+        playing: preset.playing !== undefined ? Boolean(preset.playing) : true,
+        speed: preset.speed || 1.0,
+      }),
+    });
+    for (const inj of preset.injections || []) {
+      await fetch('/api/inject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(inj),
+      });
+    }
+    state.history.clear();
+    await loadInjections();
+    await load();
+  } catch (error) {
+    renderOffline(String(error));
   }
 }
 
@@ -476,6 +676,142 @@ el.question.addEventListener('keydown', (event) => {
   }
 });
 
+if (el.labType) {
+  el.labType.addEventListener('change', syncLabDefaults);
+}
+
+if (el.labSeverity) {
+  el.labSeverity.addEventListener('input', () => {
+    el.labSeverityVal.textContent = Number(el.labSeverity.value).toFixed(2);
+  });
+}
+
+if (el.labOnsetNow) {
+  el.labOnsetNow.addEventListener('change', () => {
+    el.labOnsetH.disabled = el.labOnsetNow.checked;
+  });
+}
+
+if (el.labForm) {
+  el.labForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const type = el.labType.value;
+    if (!type) return;
+    const entry = catalogEntryById(type);
+    const params = {};
+    if (entry && entry.category === 'sensor' && el.labSignal.value) {
+      params.signal = el.labSignal.value;
+    }
+    const body = {
+      type,
+      severity: Number(el.labSeverity.value),
+      onset_asset_h: el.labOnsetNow.checked ? 'now' : Number(el.labOnsetH.value || 0),
+      progression: {
+        kind: el.labProgression.value,
+        duration_h: Number(el.labDuration.value || 0),
+      },
+      params,
+    };
+    try {
+      const response = await fetch('/api/inject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await loadInjections();
+      await load();
+    } catch (error) {
+      renderOffline(String(error));
+    }
+  });
+}
+
+if (el.labPresets) {
+  el.labPresets.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-preset-id]');
+    if (button) applyPreset(button.dataset.presetId);
+  });
+}
+
+if (el.labActive) {
+  el.labActive.addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-remove-id]');
+    if (!button) return;
+    try {
+      const response = await fetch(`/api/inject/${encodeURIComponent(button.dataset.removeId)}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await loadInjections();
+      await load();
+    } catch (error) {
+      renderOffline(String(error));
+    }
+  });
+}
+
+if (el.labReset) {
+  el.labReset.addEventListener('click', async () => {
+    try {
+      const response = await fetch('/api/inject/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reset_t: false }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      state.history.clear();
+      await loadInjections();
+      await load();
+    } catch (error) {
+      renderOffline(String(error));
+    }
+  });
+}
+
+if (el.labSave) {
+  el.labSave.addEventListener('click', async () => {
+    try {
+      const response = await fetch('/api/inject/export', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'scenario_injections.json';
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      renderOffline(String(error));
+    }
+  });
+}
+
+if (el.labLoadBtn && el.labLoadFile) {
+  el.labLoadBtn.addEventListener('click', () => el.labLoadFile.click());
+  el.labLoadFile.addEventListener('change', async () => {
+    const file = el.labLoadFile.files && el.labLoadFile.files[0];
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      const response = await fetch('/api/inject/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parsed),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      state.history.clear();
+      await loadInjections();
+      await load();
+    } catch (error) {
+      renderOffline(String(error));
+    } finally {
+      el.labLoadFile.value = '';
+    }
+  });
+}
+
 const presets = {
   what: { question: 'What is wrong with the turbine?', mode: 'summary' },
   why: { question: 'Why is it failing?', mode: 'summary' },
@@ -488,5 +824,10 @@ if (askParam) {
 }
 
 loadScenarios();
+loadCatalog();
+loadInjections();
 load();
-setInterval(load, POLL_MS);
+setInterval(() => {
+  load();
+  loadInjections();
+}, POLL_MS);

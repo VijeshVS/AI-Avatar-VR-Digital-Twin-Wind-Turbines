@@ -55,6 +55,8 @@ SIGNAL_LABELS = {
     "blade_pass_hz": "blade pass frequency",
     "rotor_angle_deg": "rotor azimuth",
     "rotor_imbalance_index": "rotor imbalance index",
+    "main_bearing_temp": "main bearing temperature",
+    "main_bearing_vibration": "main bearing vibration",
 }
 
 ACTION_FOCUS = "focus_component"
