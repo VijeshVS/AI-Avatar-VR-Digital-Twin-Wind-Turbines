@@ -29,12 +29,13 @@ namespace Vrar.AI
         private static readonly Color Accent = new Color(1f, 0.78f, 0.30f);
         private static readonly Color Muted = new Color(0.62f, 0.66f, 0.72f);
 
-        private const float PanelHeight = 322f;
-        private const float Pad = 16f;
+        private const float MinPanelHeight = 440f;
+        private const float Pad = 20f;
+        private const float DesignHeight = 900f;
 
         [SerializeField] private MvpBootstrap _bootstrap;
         [SerializeField, Min(0.5f)] private float _timeoutSeconds = 20f;
-        [SerializeField] private float _width = 430f;
+        [SerializeField] private float _width = 640f;
 
         private CopilotClient _client;
         private string _question = Presets[0];
@@ -48,6 +49,7 @@ namespace Vrar.AI
         private GUIStyle _title;
         private GUIStyle _caption;
         private GUIStyle _answerStyle;
+        private float _styleScale = -1f;
 
         public bool Visible => _visible;
         public string Answer => _answer;
@@ -183,52 +185,67 @@ namespace Vrar.AI
                 return;
             }
 
-            EnsureStyles();
+            float scale = UiScale;
+            EnsureStyles(scale);
 
-            float width = Mathf.Min(_width, Screen.width - 32f);
-            var panel = new Rect(Screen.width - width - 16f, 16f, width, PanelHeight);
-            float x = panel.x + Pad;
-            float inner = width - Pad * 2f;
-            float y = panel.y + 14f;
+            float pad = Pad * scale;
+            float maxWidth = Mathf.Min(Screen.width * 0.40f, Screen.width - 32f);
+            float width = Mathf.Min(_width * scale, maxWidth);
+            float height = Mathf.Max(MinPanelHeight, Screen.height - 32f);
+            var panel = new Rect(Screen.width - width - 16f, 16f, width, height);
+            float x = panel.x + pad;
+            float inner = width - pad * 2f;
+            float y = panel.y + 18f * scale;
 
             Color previous = GUI.color;
             GUI.color = PanelFill;
             GUI.DrawTexture(panel, Texture2D.whiteTexture);
             GUI.color = Accent;
-            GUI.DrawTexture(new Rect(panel.x, panel.y, panel.width, 3f), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(panel.x, panel.y, panel.width, 3f * scale), Texture2D.whiteTexture);
             GUI.color = previous;
 
-            GUI.Label(new Rect(x, y, inner, 20f), "AI COPILOT", _title);
-            y += 20f;
-            GUI.Label(new Rect(x, y, inner, 16f), StatusText(), _caption);
-            y += 22f;
+            GUI.Label(new Rect(x, y, inner, 24f * scale), "AI COPILOT", _title);
+            y += 24f * scale;
+            GUI.Label(new Rect(x, y, inner, 18f * scale), StatusText(), _caption);
+            y += 24f * scale;
 
-            float buttonWidth = (inner - 8f) * 0.5f;
+            float gap = 8f * scale;
+            float buttonWidth = (inner - gap) * 0.5f;
             for (int i = 0; i < Presets.Length; i++)
             {
-                var button = new Rect(x + (i % 2) * (buttonWidth + 8f), y + (i / 2) * 30f, buttonWidth, 26f);
+                var button = new Rect(
+                    x + (i % 2) * (buttonWidth + gap), y + (i / 2) * 40f * scale, buttonWidth, 34f * scale);
                 if (GUI.Button(button, Presets[i]) && !_busy)
                 {
                     Ask(Presets[i]);
                 }
             }
 
-            y += 66f;
+            y += 88f * scale;
+            float askWidth = 96f * scale;
             GUI.SetNextControlName("copilot-question");
-            _question = GUI.TextField(new Rect(x, y, inner - 82f, 26f), _question, 120);
+            _question = GUI.TextField(
+                new Rect(x, y, inner - askWidth - gap, 34f * scale), _question, 120);
 
             bool submitted = Event.current.type == EventType.KeyDown
                 && (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter)
                 && GUI.GetNameOfFocusedControl() == "copilot-question";
-            if ((GUI.Button(new Rect(x + inner - 74f, y, 74f, 26f), "Ask") || submitted) && !_busy)
+            if ((GUI.Button(new Rect(x + inner - askWidth, y, askWidth, 34f * scale), "Ask") || submitted)
+                && !_busy)
             {
                 Ask(_question);
                 Event.current.Use();
             }
 
-            y += 36f;
-            GUI.Label(new Rect(x, y, inner, PanelHeight - (y - panel.y) - Pad), _answer, _answerStyle);
+            y += 46f * scale;
+            GUI.Label(new Rect(x, y, inner, height - (y - panel.y) - pad), _answer, _answerStyle);
         }
+
+        /// <summary>
+        /// IMGUI does not scale with the Game view, so the panel derives one factor
+        /// from the viewport height: readable on a small window, larger on a big one.
+        /// </summary>
+        private static float UiScale => Mathf.Clamp(Screen.height / DesignHeight, 1f, 1.6f);
 
         private string StatusText()
         {
@@ -240,28 +257,29 @@ namespace Vrar.AI
             return string.IsNullOrEmpty(_source) ? _status : $"{_status}  ·  F2 hides";
         }
 
-        private void EnsureStyles()
+        private void EnsureStyles(float scale)
         {
-            if (_title != null)
+            if (_title != null && Mathf.Approximately(_styleScale, scale))
             {
                 return;
             }
 
+            _styleScale = scale;
             _title = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 13,
+                fontSize = Mathf.RoundToInt(15f * scale),
                 fontStyle = FontStyle.Bold,
                 normal = { textColor = Accent },
             };
             _caption = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 10,
+                fontSize = Mathf.RoundToInt(11f * scale),
                 wordWrap = true,
                 normal = { textColor = Muted },
             };
             _answerStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 12,
+                fontSize = Mathf.RoundToInt(14f * scale),
                 wordWrap = true,
                 alignment = TextAnchor.UpperLeft,
                 clipping = TextClipping.Clip,

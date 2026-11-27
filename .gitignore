@@ -42,3 +42,7 @@ venv/
 # Mono/Unity crash dumps from batchmode runs
 mono_crash.*.json
 crashlytics-build.properties
+
+# Local tooling state
+.playwright-mcp/
+.vscode/settings.json
