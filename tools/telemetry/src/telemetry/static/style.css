@@ -194,6 +194,54 @@ h2 {
   margin-top: 4px;
 }
 
+.prediction {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.prediction.ok { color: var(--ok); }
+.prediction.warn { color: var(--warn); }
+.prediction.bad { color: var(--bad); }
+.prediction.muted { color: var(--faint); font-weight: 500; }
+
+.explain {
+  margin-top: 3px;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.banner {
+  margin-top: 12px;
+  padding: 9px 11px;
+  border: 1px solid rgba(255, 176, 32, 0.35);
+  background: rgba(255, 176, 32, 0.08);
+  color: var(--warn);
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.alerts { display: grid; gap: 8px; }
+
+.alert-item {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  padding: 8px 9px;
+}
+
+.alert-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.alert-time { color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+.alert-body { color: var(--muted); font-size: 10px; line-height: 1.45; margin-top: 5px; }
+
 canvas { display: block; width: 100%; height: 36px; margin-top: 6px; }
 
 .plant {

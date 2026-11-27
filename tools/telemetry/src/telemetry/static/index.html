@@ -23,6 +23,7 @@
         <span class="hint">click a card to point the twin at it</span>
       </div>
       <div id="cards" class="cards"></div>
+      <div id="sensor-banner" class="banner" hidden></div>
       <p class="plant" id="plant"></p>
     </section>
 
@@ -47,6 +48,11 @@
       <div class="clock" id="clock">t = 0.0 s</div>
       <input id="scrub" type="range" min="0" max="240" step="1" value="0" aria-label="Scenario time">
       <div class="scrub-labels"><span>0 s</span><span>240 s</span></div>
+
+      <h2>ALERTS</h2>
+      <div id="alerts" class="alerts">
+        <span class="hint">No events yet — the predictor is listening.</span>
+      </div>
     </aside>
 
     <section class="panel lab" id="scenario-lab">

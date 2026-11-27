@@ -139,5 +139,22 @@ namespace Vrar.Tests
         {
             Assert.That(_frames[0].Component("reactor"), Is.Null);
         }
+
+        [Test]
+        public void FrameParsesPredictionsAndActiveEvents()
+        {
+            const string json = "{\"predictions\":[{\"component\":\"gearbox\","
+                + "\"status\":\"degrading\",\"band\":\"8-30 d\",\"ttf_days\":[6.0,14.0],"
+                + "\"active_events\":[{\"event_id\":\"alert1\",\"status\":\"shock\","
+                + "\"message\":\"Step detected\"}]}]}";
+            TelemetryFrame frame = JsonUtility.FromJson<TelemetryFrame>(json);
+
+            PredictionPayload prediction = frame.Prediction("gearbox");
+            Assert.That(prediction, Is.Not.Null);
+            Assert.That(prediction.ttf_days, Is.EqualTo(new[] { 6f, 14f }));
+            Assert.That(prediction.DisplayText(), Does.Contain("14.0"));
+            Assert.That(prediction.active_events[0].event_id, Is.EqualTo("alert1"));
+            Assert.That(frame.Prediction("generator"), Is.Null);
+        }
     }
 }

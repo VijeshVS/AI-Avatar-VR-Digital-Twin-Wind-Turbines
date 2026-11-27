@@ -95,6 +95,9 @@ namespace Vrar.Presentation
         private readonly List<Rect> _switcherRects = new List<Rect>();
         private readonly StringBuilder _builder = new StringBuilder();
         private readonly Dictionary<int, GUIStyle> _bigStyles = new Dictionary<int, GUIStyle>();
+        private readonly HashSet<string> _seenEvents = new HashSet<string>();
+        private string _alertText = string.Empty;
+        private float _alertUntil;
 
         private GUIStyle _title;
         private GUIStyle _subtitle;
@@ -129,6 +132,17 @@ namespace Vrar.Presentation
             _lastFrame = frame;
             _connected = connected;
             _statusLine = statusLine;
+            foreach (Telemetry.PredictionPayload prediction in frame?.predictions ?? Array.Empty<Telemetry.PredictionPayload>())
+            {
+                foreach (Telemetry.PredictionEventPayload alert in prediction?.active_events ?? Array.Empty<Telemetry.PredictionEventPayload>())
+                {
+                    if (alert != null && !string.IsNullOrEmpty(alert.event_id) && _seenEvents.Add(alert.event_id))
+                    {
+                        _alertText = alert.message;
+                        _alertUntil = Time.unscaledTime + 6f;
+                    }
+                }
+            }
         }
 
         /// <summary>Vertical extents measured for the current frame and focus.</summary>
@@ -145,6 +159,7 @@ namespace Vrar.Presentation
             public float Summary;
             public float Big;
             public float Reason;
+            public float Prediction;
             public float Metrics;
             public float MetricLabel;
             public float MetricValue;
@@ -233,6 +248,18 @@ namespace Vrar.Presentation
 
             GUI.Label(new Rect(layout.X, PadTop + layout.PanelHeight - PadBottom - layout.Hint, layout.Inner, layout.Hint),
                 HintText(layout.Focused), _hint);
+
+            if (Time.unscaledTime < _alertUntil && !string.IsNullOrEmpty(_alertText))
+            {
+                float toastWidth = Mathf.Min(400f, Screen.width - 32f);
+                float toastHeight = _caption.CalcHeight(new GUIContent(_alertText), toastWidth - 24f) + 24f;
+                Rect toast = new Rect(Screen.width - toastWidth - 16f, 16f, toastWidth, toastHeight);
+                Color previous = GUI.color;
+                GUI.color = PanelFill;
+                GUI.DrawTexture(toast, Texture2D.whiteTexture);
+                GUI.color = previous;
+                GUI.Label(new Rect(toast.x + 12f, toast.y + 12f, toast.width - 24f, toast.height - 24f), _alertText, _caption);
+            }
 
             HandleClicks();
         }
@@ -337,8 +364,15 @@ namespace Vrar.Presentation
             float captionY = barY + BarHeight + BarGap;
             Telemetry.ComponentPayload component = _lastFrame?.Component(avatar.ComponentId);
             string reason = component != null ? component.PrimaryReason() : string.Empty;
+            float captionHeight = _caption.CalcHeight(new GUIContent("reason"), 400f);
             GUI.Label(new Rect(row.x, captionY, layout.Inner - ChipColumnWidth - ChipGap,
-                row.y + row.height - captionY), reason, _caption);
+                captionHeight), reason, _caption);
+            Telemetry.PredictionPayload prediction = _lastFrame?.Prediction(avatar.ComponentId);
+            if (prediction != null)
+            {
+                GUI.Label(new Rect(row.x, captionY + captionHeight, layout.Inner - ChipColumnWidth - ChipGap,
+                    captionHeight), prediction.DisplayText(), _caption);
+            }
 
             DrawChip(new Rect(row.x + layout.Inner - ChipColumnWidth, barY - 1f, ChipColumnWidth, labelHeight),
                 $"{health * 100f:0}%", color);
@@ -397,6 +431,14 @@ namespace Vrar.Presentation
 
             GUI.Label(new Rect(layout.X, y, layout.Inner, layout.Reason), ReasonText(component), _detail);
             y += layout.Reason + BlockGap;
+
+            Telemetry.PredictionPayload prediction = _lastFrame?.Prediction(_focus.ComponentId);
+            if (prediction != null)
+            {
+                GUI.Label(new Rect(layout.X, y, layout.Inner, layout.Prediction),
+                    prediction.DisplayText(), _caption);
+            }
+            y += layout.Prediction + BlockGap;
 
             DrawMetrics(layout, component, avatar, y);
             y += layout.Metrics + BlockGap;
@@ -590,6 +632,7 @@ namespace Vrar.Presentation
                 Summary = _caption.CalcHeight(new GUIContent("worst Gearbox 4%"), inner),
                 Big = _bigProbe.CalcHeight(new GUIContent("100%"), inner * 0.35f),
                 Reason = _detail.CalcHeight(new GUIContent(ReasonText(null)), inner),
+                Prediction = _caption.CalcHeight(new GUIContent("Predicted: 6.0–14.0 d"), inner),
                 TableHeader = _tableHeader.CalcHeight(new GUIContent("SIGNAL"), inner),
                 Hint = _hint.CalcHeight(new GUIContent(HintText(_focus.HasFocus)), inner),
             };
@@ -613,6 +656,7 @@ namespace Vrar.Presentation
             {
                 content += layout.Section + BlockGap
                            + layout.Big + TitleGap + layout.Reason + BlockGap
+                           + layout.Prediction + BlockGap
                            + layout.Metrics + BlockGap
                            + layout.Section + BlockGap + layout.TableHeader + TitleGap
                            + factors.Length * layout.FactorRow + BlockGap
@@ -644,7 +688,7 @@ namespace Vrar.Presentation
         {
             float labelHeight = _body.CalcHeight(new GUIContent("Component"), LabelColumnWidth);
             float captionHeight = _caption.CalcHeight(new GUIContent("reason"), 400f);
-            return Mathf.Max(labelHeight, BarHeight) + BarGap + captionHeight + BlockGap;
+            return Mathf.Max(labelHeight, BarHeight) + BarGap + 2f * captionHeight + BlockGap;
         }
 
         /// <summary>

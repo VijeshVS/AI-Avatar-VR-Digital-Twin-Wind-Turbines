@@ -1,0 +1,72 @@
+{
+  "turbine_id": "T1",
+  "scenario": "nominal",
+  "n_ticks": 336,
+  "operating_range": {
+    "ambient_temp_c": [
+      5.124321501572559,
+      13.789028137562617
+    ],
+    "rotor_rpm": [
+      3.285713336961832,
+      12.6
+    ]
+  },
+  "signals": {
+    "gearbox_temp_c": {
+      "intercept": 44.394017,
+      "ambient": 0.987389,
+      "load": 17.568585,
+      "sigma": 0.180321,
+      "ewma_sigma": 0.11608
+    },
+    "generator_winding_temp_c": {
+      "intercept": 62.006112,
+      "ambient": -0.110469,
+      "load": 34.041867,
+      "sigma": 0.206843,
+      "ewma_sigma": 0.104871
+    },
+    "main_bearing_temp": {
+      "intercept": 12.310331,
+      "ambient": 0.969378,
+      "load": 8.953522,
+      "sigma": 0.164073,
+      "ewma_sigma": 0.086449
+    },
+    "gearbox_vibration_mm_s": {
+      "intercept": 1.360952,
+      "rpm": 0.092521,
+      "sigma": 0.05948,
+      "ewma_sigma": 0.036206
+    },
+    "main_bearing_vibration": {
+      "intercept": 1.066747,
+      "rpm": 0.067813,
+      "sigma": 0.039233,
+      "ewma_sigma": 0.026988
+    },
+    "blade_1p_ratio": {
+      "intercept": 0.0,
+      "inverse_rpm": 0.0,
+      "inverse_rpm2": 0.0,
+      "sigma": 0.0001,
+      "ewma_sigma": 0.0001
+    },
+    "pitch_error_rms": {
+      "intercept": 0.255818,
+      "sigma": 0.062776,
+      "ewma_sigma": 0.041608
+    },
+    "converter_fault_rate": {
+      "intercept": 0.0,
+      "sigma": 0.0001,
+      "ewma_sigma": 0.0001
+    },
+    "power_ratio": {
+      "intercept": 0.999849,
+      "sigma": 0.000212,
+      "ewma_sigma": 0.000141
+    }
+  }
+}

@@ -120,6 +120,74 @@ def test_context_carries_only_computed_numbers() -> None:
     assert gearbox["top_factor"]["signal"] == "gearbox_temp_rise_c"
 
 
+def test_predictions_are_in_the_copilot_context() -> None:
+    frame = frame_at(15.0, "nominal")
+    estimate = prognosis.estimate(15.0, "nominal")
+    predictions = {
+        "gearbox": {
+            "health": 0.72,
+            "state": "warning",
+            "status": "degrading",
+            "band": "8-30 d",
+            "ttf_days": [8.0, 30.0],
+            "confidence": 0.66,
+            "top_contributors": [{"text": "Gearbox temperature 4.20 °C above expected"}],
+            "active_events": [],
+            "sensor_faults": [],
+        }
+    }
+
+    context = copilot.build_context(frame, estimate, predictions)
+
+    assert context["predictions"]["gearbox"]["ttf_days"] == [8.0, 30.0]
+    assert context["predictions"]["gearbox"]["band"] == "8-30 d"
+    ok, _ = copilot._grounded("The gearbox is degrading, forecast 8 to 30 days.", context)
+    assert ok
+
+
+def test_grounding_rejects_invented_numbers() -> None:
+    context = {"health_pct": 72, "band": "<8 d", "ttf_days": [6.0, 14.0]}
+
+    ok, invented = copilot._grounded("The gearbox will fail in 3 days at 72%.", context)
+
+    assert ok is False
+    assert invented == [3.0]
+
+
+def test_grounding_checks_numbers_in_model_actions_too() -> None:
+    context = {"t": 10.0}
+    raw_reply = '{"answer":"Review the current frame.","actions":[{"type":"set_time","seconds":999}]}'
+
+    ok, invented = copilot._grounded(raw_reply, context)
+
+    assert ok is False
+    assert invented == [999.0]
+
+
+def test_ungrounded_llm_answer_falls_back_to_the_narrator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        copilot,
+        "config_from_env",
+        lambda: copilot.LlmConfig("key", "http://localhost", "model", 1.0),
+    )
+    monkeypatch.setattr(
+        copilot,
+        "_call_model",
+        lambda question, context, config, system=None: json.dumps(
+            {"answer": "The gearbox will fail in exactly 3 days.", "actions": []}
+        ),
+    )
+
+    frame = frame_at(150.0, "gearbox_degradation")
+    estimate = prognosis.estimate(150.0, "gearbox_degradation")
+    reply = copilot.ask("When will it fail?", frame, estimate)
+
+    assert reply.source == "rules"
+    assert "ungrounded numbers" in reply.detail
+
+
 def test_assistant_endpoint_shape() -> None:
     response = client.post(
         "/api/assistant",
